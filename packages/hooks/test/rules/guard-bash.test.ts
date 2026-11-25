@@ -1,25 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { checkCommand, type GitContext, guardBashRule } from '../../src/rules/guard-bash.js';
+import { checkCommand, guardBashRule } from '../../src/rules/guard-bash.js';
 import { assertFast, runRuleOnFixtures } from '../harness.js';
+import { fakeContext } from './fake-context.js';
 
 /** A repo on a feature branch whose remote default is main, counting git lookups. */
 function fakeGit(current: string | undefined = 'feature/x', defaults: Record<string, string> = {}) {
-  const calls: string[] = [];
-  const git: GitContext = {
-    currentBranch: () => {
-      calls.push('currentBranch');
-      return current;
-    },
-    defaultBranch: (remote) => {
-      calls.push(`defaultBranch ${remote}`);
-      return defaults[remote] ?? 'main';
-    },
-  };
-  return { git, calls };
+  const { context, calls } = fakeContext({ current, defaults });
+  return { git: context, calls };
 }
 
-runRuleOnFixtures('OLDMAN-G01', guardBashRule(fakeGit().git));
-runRuleOnFixtures('OLDMAN-G02', guardBashRule(fakeGit().git));
+for (const rule of ['OLDMAN-G01', 'OLDMAN-G02', 'OLDMAN-G03', 'OLDMAN-G04']) {
+  runRuleOnFixtures(rule, guardBashRule(fakeContext().context));
+}
 
 describe('OLDMAN-G01 force-push', () => {
   it('blocks a force-push of the current branch when it is protected', () => {
@@ -115,6 +107,8 @@ describe('checkCommand', () => {
       'npm test && git commit -m "x" --no-verify',
       '$env:FOO=1; git push --force origin master',
       'echo "git push -f origin main" | tee log.txt',
+      'rm -rf ./dist /etc && Remove-Item -Recurse -Force ..\\other',
+      'DATABASE_URL=postgresql://localhost/app npx prisma migrate reset && psql -c "DROP TABLE t"',
     ];
     assertFast(guardBashRule(fakeGit().git), {
       generate: (index) => commands[index % commands.length] ?? '',

@@ -48,7 +48,14 @@ function readQuoted(text: string, start: number, dialect: Dialect): [string, num
   return [value, text.length];
 }
 
-function finish(words: readonly Word[]): string[] {
+export interface SimpleCommand {
+  /** Leading `NAME=value` words, as in `DATABASE_URL=... npx prisma migrate reset`. */
+  readonly assignments: readonly string[];
+  readonly words: readonly string[];
+}
+
+function finish(words: readonly Word[]): SimpleCommand {
+  const assignments: string[] = [];
   const kept: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? { text: '', quoted: false };
@@ -63,6 +70,7 @@ function finish(words: readonly Word[]): string[] {
   while (start < kept.length) {
     const word = kept[start] ?? '';
     if (ASSIGNMENT.test(word)) {
+      assignments.push(word);
       start++;
     } else if (WRAPPERS.has(programName(word))) {
       start++;
@@ -71,17 +79,24 @@ function finish(words: readonly Word[]): string[] {
       break;
     }
   }
-  return kept.slice(start);
+  return { assignments, words: kept.slice(start) };
+}
+
+/** Like {@link parseCommands}, but only the words of commands that run a program. */
+export function splitCommands(input: string, dialect: Dialect): string[][] {
+  return parseCommands(input, dialect)
+    .map((command) => [...command.words])
+    .filter((words) => words.length > 0);
 }
 
 /**
- * Splits `text` into simple commands, each a list of words with quotes and escapes removed and
- * leading `NAME=value` assignments, wrappers (`sudo`, `env`, ...) and redirections dropped.
+ * Splits `text` into simple commands: words with quotes and escapes removed, redirections and
+ * wrappers (`sudo`, `env`, ...) dropped, and leading `NAME=value` words kept apart.
  */
-export function splitCommands(input: string, dialect: Dialect): string[][] {
+export function parseCommands(input: string, dialect: Dialect): SimpleCommand[] {
   const text = input.replaceAll('\r\n', '\n');
   const escape = dialect === 'bash' ? '\\' : '`';
-  const commands: string[][] = [];
+  const commands: SimpleCommand[] = [];
   let words: Word[] = [];
   let word: Word | undefined;
   const endWord = (): void => {
@@ -91,7 +106,7 @@ export function splitCommands(input: string, dialect: Dialect): string[][] {
   const endCommand = (): void => {
     endWord();
     const command = finish(words);
-    if (command.length > 0) commands.push(command);
+    if (command.words.length > 0 || command.assignments.length > 0) commands.push(command);
     words = [];
   };
   for (let i = 0; i < text.length; i++) {

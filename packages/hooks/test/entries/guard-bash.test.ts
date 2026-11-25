@@ -23,10 +23,18 @@ interface Run {
   stderr: string;
 }
 
-function runGuard(stdin: string): Run {
+/**
+ * Runs the built hook. The environment is controlled: a Claude Code session running these tests
+ * would otherwise pass its own CLAUDE_PROJECT_DIR and DATABASE_URL to the hook.
+ */
+function runGuard(stdin: string, env: Record<string, string> = {}): Run {
+  const inherited = { ...process.env };
+  delete inherited.CLAUDE_PROJECT_DIR;
+  delete inherited.DATABASE_URL;
   const result = spawnSync(process.execPath, [join(outDir, 'guard-bash.mjs')], {
     input: stdin,
     encoding: 'utf8',
+    env: { ...inherited, ...env },
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -136,5 +144,36 @@ describe('guard-bash hook', () => {
       'force-pushing to develop',
     );
     expect(runGuard(hookInput('Bash', 'git push -f origin develop', project)).stdout).toBe('');
+  });
+
+  it('blocks a recursive delete outside the project and allows one inside', () => {
+    expect(denyReason(runGuard(hookInput('Bash', 'rm -rf ../elsewhere')))).toContain('OLDMAN-G03');
+    expect(runGuard(hookInput('Bash', 'rm -rf ./dist')).stdout).toBe('');
+    expect(
+      denyReason(runGuard(hookInput('PowerShell', 'Remove-Item -Recurse -Force ~'))),
+    ).toContain('OLDMAN-G03');
+  });
+
+  it('uses CLAUDE_PROJECT_DIR as the project root when cwd is a subdirectory', () => {
+    const sub = join(project, 'packages', 'web');
+    mkdirSync(sub, { recursive: true });
+    const env = { CLAUDE_PROJECT_DIR: project };
+    expect(runGuard(hookInput('Bash', 'rm -rf ../api/dist', sub), env).stdout).toBe('');
+    expect(denyReason(runGuard(hookInput('Bash', 'rm -rf ../api/dist', sub)))).toContain(
+      'OLDMAN-G03',
+    );
+  });
+
+  it('reads DATABASE_URL from the environment, then from the project .env', () => {
+    const app = join(root, 'app');
+    mkdirSync(app);
+    const reset = hookInput('Bash', 'npx prisma migrate reset', app);
+    expect(denyReason(runGuard(reset))).toContain('no DATABASE_URL was found');
+    writeFileSync(join(app, '.env'), 'DATABASE_URL="postgresql://localhost:5432/app"\n');
+    expect(runGuard(reset).stdout).toBe('');
+    const remote = { DATABASE_URL: 'postgresql://app@db.example.com/app' };
+    expect(denyReason(runGuard(reset, remote))).toContain(
+      'OLDMAN-G04: prisma migrate reset destroys data and the database is not local',
+    );
   });
 });
