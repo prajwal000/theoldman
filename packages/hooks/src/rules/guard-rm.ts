@@ -2,12 +2,12 @@
 // of anything not strictly inside the project root: `/`, `~`, `..`, drive roots, other absolute
 // paths, and the project root itself.
 
-import { isStrictlyInside, resolvePath } from '../lib/paths.js';
-import { type Dialect, programName } from '../lib/shell.js';
+import { isStrictlyInside } from '../lib/paths.js';
+import { type Dialect, isAbbreviation as isParameter, programName } from '../lib/shell.js';
+import { resolveTarget } from './command-expand.js';
 import type { GuardContext, Violation } from './guard-context.js';
 
 const REMOVE_ITEM = new Set(['remove-item', 'rm', 'ri', 'del', 'erase', 'rd', 'rmdir']);
-const HOME = /^(?:~|\$HOME|\$\{HOME\}|\$env:HOME|\$env:USERPROFILE|%USERPROFILE%)(?=$|[/\\])/i;
 
 /** Targets of `rm` when both recursive and forced, else none. */
 function rmTargets(args: readonly string[]): string[] {
@@ -31,10 +31,6 @@ function rmTargets(args: readonly string[]): string[] {
   }
   return recursive && force ? targets : [];
 }
-
-/** True when `name` is an abbreviation PowerShell accepts for `parameter`. */
-const isParameter = (name: string, parameter: string, shortest: number): boolean =>
-  name.length >= shortest && parameter.startsWith(name);
 
 /** Targets of `Remove-Item` with both -Recurse and -Force and no -WhatIf, else none. */
 function removeItemTargets(args: readonly string[]): string[] {
@@ -67,16 +63,11 @@ function removeItemTargets(args: readonly string[]): string[] {
   return recursive && force && !whatIf ? targets : [];
 }
 
-/** Absolute form of a target, or undefined when it depends on a variable we cannot see. */
-function resolveTarget(target: string, context: GuardContext): string | undefined {
-  const expanded = target.replace(HOME, context.home);
-  if (/\$\{?\w|%\w+%/.test(expanded)) return undefined;
-  return resolvePath(expanded, context.cwd);
-}
-
+/** `cwd` is the directory the command runs in, after any `cd` earlier on the line. */
 export function removalViolation(
   words: readonly string[],
   dialect: Dialect,
+  cwd: string | undefined,
   context: GuardContext,
 ): Violation | undefined {
   const program = programName(words[0] ?? '');
@@ -88,7 +79,7 @@ export function removalViolation(
         ? rmTargets(args)
         : [];
   const outside = targets.find((target) => {
-    const resolved = resolveTarget(target, context);
+    const resolved = resolveTarget(target, cwd, context.home);
     return resolved !== undefined && !isStrictlyInside(resolved, context.projectRoot);
   });
   if (outside === undefined) return undefined;

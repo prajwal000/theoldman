@@ -1,5 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -161,6 +162,34 @@ describe('guard-bash hook', () => {
     expect(runGuard(hookInput('Bash', 'rm -rf ../api/dist', sub), env).stdout).toBe('');
     expect(denyReason(runGuard(hookInput('Bash', 'rm -rf ../api/dist', sub)))).toContain(
       'OLDMAN-G03',
+    );
+  });
+
+  it('checks the package.json script that npm run would start, without running it', () => {
+    const pkg = join(root, 'pkg');
+    mkdirSync(join(pkg, 'src'), { recursive: true });
+    const marker = join(pkg, 'ran.txt');
+    writeFileSync(
+      join(pkg, 'package.json'),
+      JSON.stringify({
+        scripts: {
+          ship: `node -e "require('fs').writeFileSync('ran.txt','x')" && git push -f origin main`,
+          release: 'npm run ship',
+          build: 'tsc',
+        },
+      }),
+    );
+    expect(denyReason(runGuard(hookInput('Bash', 'npm run release', join(pkg, 'src'))))).toContain(
+      'OLDMAN-G01',
+    );
+    expect(runGuard(hookInput('PowerShell', 'pnpm build', pkg)).stdout).toBe('');
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('checks a PowerShell -EncodedCommand', () => {
+    const encoded = Buffer.from('git push -f origin main', 'utf16le').toString('base64');
+    expect(denyReason(runGuard(hookInput('Bash', `pwsh -NoProfile -ec ${encoded}`)))).toContain(
+      'OLDMAN-G01',
     );
   });
 

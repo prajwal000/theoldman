@@ -7,6 +7,7 @@ import { loadConfig } from '../lib/config.js';
 import { readDotenv } from '../lib/dotenv.js';
 import { currentBranch, defaultBranch } from '../lib/git.js';
 import { readToolHookInput } from '../lib/input.js';
+import { findPackageScripts } from '../lib/package-scripts.js';
 import { block, failOpen, pass, runHook } from '../lib/output.js';
 import { checkCommand } from '../rules/guard-bash.js';
 
@@ -28,6 +29,7 @@ runHook(() => {
       home: homedir(),
       env: (name) => process.env[name],
       dotenv: (name) => readDotenv(join(projectRoot, '.env'), name),
+      packageScripts: (dir) => findPackageScripts(dir),
       currentBranch: () => currentBranch(cwd),
       defaultBranch: (remote) => defaultBranch(cwd, remote),
     },

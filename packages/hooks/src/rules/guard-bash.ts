@@ -1,28 +1,28 @@
 // Guard rules for commands run through the Bash and PowerShell tools.
 //
 // OLDMAN-G01 blocks a force-push (-f, --force, --force-with-lease, +refspec, --mirror) to main,
-// master or the remote's default branch. OLDMAN-G02 blocks skipping git hooks with
-// `git commit --no-verify` / `-n` and `git push --no-verify`. OLDMAN-G03 (guard-rm.ts) blocks
-// recursive forced deletes outside the project; OLDMAN-G04 (guard-db.ts) blocks destructive
-// database commands unless the database is local.
+// master or the remote's default branch, and deleting one of them on the remote. OLDMAN-G02
+// blocks skipping git hooks (`commit --no-verify` / `-n`, `push --no-verify`). OLDMAN-G03
+// (guard-rm.ts) blocks recursive forced deletes outside the project; OLDMAN-G04 (guard-db.ts)
+// blocks destructive database commands unless the database is local. command-expand.ts also
+// checks strings passed to `bash -c`, `cmd /c` and `pwsh -Command` / `-EncodedCommand`, and the
+// package.json scripts that `npm|pnpm|yarn run` would start.
 //
-// Known gaps (this reads commands, it does not run a shell):
-// - Commands built at run time are not seen: variables, aliases, functions, scripts, `eval`,
-//   `sh -c "..."`, `Invoke-Expression`, and command substitution inside double quotes.
-// - Abbreviated long options (`--no-verif`), `git -c alias.x=...`, and `env -u NAME` are not
-//   resolved. `git push --delete main` is not a force-push and is not blocked here.
-// - Heredoc bodies are read as commands, so a heredoc that contains a blocked command is blocked.
-// - The default branch comes from the local `refs/remotes/<remote>/HEAD`; it is unknown if that
-//   ref was never set, and then only main and master are protected.
-// - Delete targets are resolved against the hook's working directory, so a `cd` earlier in the
-//   same command line is ignored; targets that use a variable other than the home directory
-//   (`rm -rf "$DIR"`) cannot be resolved and are allowed.
-// - Destructive SQL is matched anywhere in a command line that also runs psql or mysql, so
-//   `echo "DROP TABLE t" && psql -c "SELECT 1"` is treated as destructive. npm scripts that
-//   wrap these commands (`npm run db:reset`) are not seen.
+// It catches honest mistakes, not deliberate evasion. Known gaps (it reads commands, it does
+// not run a shell):
+// - Values only known at run time: variables (`rm -rf "$DIR"`, `cd $X`), aliases, shell
+//   functions, script files (`./reset.sh`, `pwsh -File x.ps1`), `eval` / `Invoke-Expression`
+//   on built strings, and command substitution inside double quotes.
+// - cmd's own delete commands (`rd /s /q`, `del /s`) are not checked.
+// - The default branch comes from the local `refs/remotes/<remote>/HEAD`; if that ref was never
+//   set, only main and master are protected.
+// - False alarms: heredoc bodies are read as commands, and DROP or TRUNCATE text anywhere in a
+//   line that also runs psql or mysql counts as destructive.
 
 import type { Finding, Rule } from '../lib/rules.js';
-import { type Dialect, parseCommands, programName } from '../lib/shell.js';
+import type { Dialect } from '../lib/shell.js';
+import { programName } from '../lib/shell.js';
+import { expandCommands } from './command-expand.js';
 import { commitSkipsHooks, gitInvocation, parsePush, refspecTarget } from './git-args.js';
 import type { GitContext, GuardContext, Violation } from './guard-context.js';
 import { databaseViolation } from './guard-db.js';
@@ -30,9 +30,16 @@ import { removalViolation } from './guard-rm.js';
 
 export type { GitContext, GuardContext, Violation } from './guard-context.js';
 
+const SAFE_ALTERNATIVE = 'or ask the user to run it themselves.';
+
 const forcePush = (target: string): Violation => ({
   id: 'OLDMAN-G01',
-  message: `force-pushing to ${target} rewrites history others depend on. Push to a new branch and open a pull request, or ask the user to run the force-push themselves.`,
+  message: `force-pushing to ${target} rewrites history others depend on. Push to a new branch and open a pull request, ${SAFE_ALTERNATIVE}`,
+});
+
+const deleteBranch = (target: string): Violation => ({
+  id: 'OLDMAN-G01',
+  message: `deleting ${target} on the remote removes a branch others depend on. Delete only your own feature branches, ${SAFE_ALTERNATIVE}`,
 });
 
 const skipHooks: Violation = {
@@ -41,52 +48,63 @@ const skipHooks: Violation = {
     '--no-verify skips the git hooks that check this repo. Fix what the hook reports, then commit or push without --no-verify.',
 };
 
-function forcePushViolation(args: readonly string[], git: GitContext): Violation | undefined {
-  const { force, allBranches, remote, refspecs } = parsePush(args);
-  if (allBranches) {
-    return force ? forcePush('every branch, including the default branch') : undefined;
-  }
+function pushViolations(args: readonly string[], git: GitContext): (Violation | undefined)[] {
+  const push = parsePush(args);
+  const isProtected = (branch: string | undefined): branch is string =>
+    branch !== undefined &&
+    branch !== '' &&
+    (branch === 'main' || branch === 'master' || branch === git.defaultBranch(push.remote));
+  // `git push origin :main` deletes main, as does `git push --delete origin main`.
+  const deleted = push.delete
+    ? push.refspecs.map(refspecTarget)
+    : push.refspecs.filter((s) => s.startsWith(':')).map(refspecTarget);
   // With no refspec git pushes the current branch; a `+` forces one refspec even without -f.
+  const pushed = push.refspecs.filter((s) => !s.startsWith(':'));
   const forced =
-    refspecs.length > 0
-      ? refspecs.filter((s) => force || s.startsWith('+'))
-      : force
+    push.refspecs.length > 0
+      ? pushed.filter((s) => push.force || s.startsWith('+'))
+      : push.force
         ? ['HEAD']
         : [];
-  const targets = forced
+  const forcedTargets = forced
     .map(refspecTarget)
     .map((t) => (t === 'HEAD' || t === '@' ? git.currentBranch() : t));
-  const protectedTarget = targets.find(
-    (branch) =>
-      branch !== undefined &&
-      branch !== '' &&
-      (branch === 'main' || branch === 'master' || branch === git.defaultBranch(remote)),
-  );
-  return protectedTarget === undefined ? undefined : forcePush(protectedTarget);
+  const deletedTarget = deleted.find(isProtected);
+  const forcedTarget = push.allBranches ? undefined : forcedTargets.find(isProtected);
+  return [
+    push.allBranches && push.force
+      ? forcePush('every branch, including the default branch')
+      : undefined,
+    deletedTarget === undefined ? undefined : deleteBranch(deletedTarget),
+    forcedTarget === undefined || push.delete ? undefined : forcePush(forcedTarget),
+    push.noVerify ? skipHooks : undefined,
+  ];
 }
 
 function gitViolations(words: readonly string[], git: GitContext): (Violation | undefined)[] {
   const invocation = programName(words[0] ?? '') === 'git' ? gitInvocation(words) : undefined;
-  const { subcommand, args = [] } = invocation ?? {};
-  if (subcommand === 'push') {
-    return [forcePushViolation(args, git), args.includes('--no-verify') ? skipHooks : undefined];
-  }
-  return [subcommand === 'commit' && commitSkipsHooks(args) ? skipHooks : undefined];
+  if (invocation?.subcommand === 'push') return pushViolations(invocation.args, git);
+  return [
+    invocation?.subcommand === 'commit' && commitSkipsHooks(invocation.args)
+      ? skipHooks
+      : undefined,
+  ];
 }
 
-/** Every guard violation in a command line, at most one per rule, in order of appearance. */
+/** Every guard violation in a command line, at most one per rule. */
 export function checkCommand(text: string, dialect: Dialect, context: GuardContext): Violation[] {
-  const commands = parseCommands(text, dialect);
   const found = new Map<string, Violation>();
-  const violations = [
-    ...commands.flatMap(({ words }) => [
-      ...gitViolations(words, context),
-      removalViolation(words, dialect, context),
-    ]),
-    databaseViolation(text, commands, context),
-  ];
-  for (const violation of violations) {
-    if (violation !== undefined && !found.has(violation.id)) found.set(violation.id, violation);
+  for (const unit of expandCommands(text, dialect, context)) {
+    const violations = [
+      ...unit.commands.flatMap(({ words, cwd }) => [
+        ...gitViolations(words, context),
+        removalViolation(words, unit.dialect, cwd, context),
+      ]),
+      databaseViolation(unit, context),
+    ];
+    for (const violation of violations) {
+      if (violation !== undefined && !found.has(violation.id)) found.set(violation.id, violation);
+    }
   }
   return [...found.values()];
 }
