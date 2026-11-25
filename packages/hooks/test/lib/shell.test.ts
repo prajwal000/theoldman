@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { programName, splitCommands } from '../../src/lib/shell.js';
+import { parseCommands, programName, splitCommands } from '../../src/lib/shell.js';
+
+describe('parseCommands', () => {
+  it('keeps leading assignments apart, including assignment-only commands', () => {
+    expect(parseCommands('A=1 B=x sudo C=2 npx prisma; D=3', 'bash')).toEqual([
+      { assignments: ['A=1', 'B=x', 'C=2'], words: ['npx', 'prisma'] },
+      { assignments: ['D=3'], words: [] },
+    ]);
+  });
+});
 
 describe('programName', () => {
   it.each([

@@ -19,6 +19,36 @@ export function toProjectRelative(filePath: string, projectDir: string): string 
   return fold(file).startsWith(`${fold(root)}/`) ? file.slice(root.length + 1) : file;
 }
 
+/**
+ * `target` made absolute against `base` and normalized, with `.` and `..` resolved. Works on
+ * Windows-style paths on any OS, unlike node:path, because hook input can come from either.
+ */
+export function resolvePath(target: string, base: string): string {
+  const path = normalizePath(target);
+  const absolute =
+    /^[a-z]:/.test(path) || path.startsWith('/')
+      ? path
+      : `${normalizePath(base).replace(/\/+$/, '')}/${path}`;
+  const [, prefix = '', rest = ''] = /^((?:[a-z]:)?\/?)(.*)$/s.exec(absolute) ?? [];
+  const parts: string[] = [];
+  for (const part of rest.split('/')) {
+    if (part === '..') {
+      parts.pop();
+    } else if (part !== '' && part !== '.') {
+      parts.push(part);
+    }
+  }
+  return prefix + parts.join('/');
+}
+
+/** True when `path` is strictly below `root`; drive paths compare case-insensitively. */
+export function isStrictlyInside(path: string, root: string): boolean {
+  const base = resolvePath(root, '/').replace(/\/$/, '');
+  const fold = /^[a-z]:/.test(base) ? (p: string) => p.toLowerCase() : (p: string) => p;
+  const full = fold(resolvePath(path, base));
+  return full.startsWith(`${fold(base)}/`) && full.length > base.length + 1;
+}
+
 /** Supports `*` (within one segment), `?` (one character) and `**` (any number of segments). */
 export function globToRegExp(glob: string): RegExp {
   const pattern = normalizePath(glob);

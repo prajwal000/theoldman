@@ -1,3 +1,7 @@
+// src/entries/guard-bash.ts
+import { homedir } from "node:os";
+import { join as join2 } from "node:path";
+
 // src/lib/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
 import { join } from "node:path";
@@ -123,6 +127,26 @@ function invalid(problem) {
   return { config: DEFAULT_CONFIG, warning: `${CONFIG_FILE} ${problem}; using defaults.` };
 }
 
+// src/lib/dotenv.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+var LINE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/;
+function readDotenv(file, name) {
+  let text;
+  try {
+    text = readFileSync3(file, "utf8");
+  } catch {
+    return void 0;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const match = LINE.exec(line);
+    if (match?.[1] !== name) continue;
+    const raw = match[2] ?? "";
+    const quoted = /^(["'])(.*)\1$/.exec(raw);
+    return quoted ? quoted[2] ?? "" : raw.replace(/\s+#.*$/, "");
+  }
+  return void 0;
+}
+
 // src/lib/git.ts
 import { execFileSync } from "node:child_process";
 var NETWORK_SUBCOMMANDS = /* @__PURE__ */ new Set(["fetch", "pull", "push", "clone", "ls-remote", "remote"]);
@@ -229,6 +253,7 @@ function readQuoted(text, start, dialect) {
   return [value, text.length];
 }
 function finish(words) {
+  const assignments = [];
   const kept = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? { text: "", quoted: false };
@@ -243,6 +268,7 @@ function finish(words) {
   while (start < kept.length) {
     const word = kept[start] ?? "";
     if (ASSIGNMENT.test(word)) {
+      assignments.push(word);
       start++;
     } else if (WRAPPERS.has(programName(word))) {
       start++;
@@ -251,9 +277,9 @@ function finish(words) {
       break;
     }
   }
-  return kept.slice(start);
+  return { assignments, words: kept.slice(start) };
 }
-function splitCommands(input, dialect) {
+function parseCommands(input, dialect) {
   const text = input.replaceAll("\r\n", "\n");
   const escape = dialect === "bash" ? "\\" : "`";
   const commands = [];
@@ -266,7 +292,7 @@ function splitCommands(input, dialect) {
   const endCommand = () => {
     endWord();
     const command = finish(words);
-    if (command.length > 0) commands.push(command);
+    if (command.words.length > 0 || command.assignments.length > 0) commands.push(command);
     words = [];
   };
   for (let i = 0; i < text.length; i++) {
@@ -363,6 +389,167 @@ function commitSkipsHooks(args) {
   return false;
 }
 
+// src/rules/guard-db.ts
+var PACKAGE_RUNNERS = /* @__PURE__ */ new Set(["npx", "pnpx", "bunx", "yarn", "pnpm", "bun", "npm"]);
+var SQL_CLIENTS = /* @__PURE__ */ new Set(["psql", "mysql", "mariadb"]);
+var DESTRUCTIVE_SQL = /\b(?:drop\s+(?:database|table|schema)|truncate)\b/i;
+var LOCAL_HOSTS = /* @__PURE__ */ new Set(["", "localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+function prismaOperation(words) {
+  const at = words.findIndex((word) => programName(word) === "prisma");
+  if (at === -1 || at > 0 && !PACKAGE_RUNNERS.has(programName(words[0] ?? ""))) return void 0;
+  const args = words.slice(at + 1);
+  const [first, second] = args.filter((arg) => !arg.startsWith("-"));
+  if (first === "migrate" && second === "reset") return "prisma migrate reset";
+  if (first === "db" && second === "push" && args.includes("--force-reset")) {
+    return "prisma db push --force-reset";
+  }
+  return void 0;
+}
+function clientUrl(words) {
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i] ?? "";
+    if (word.includes("://")) return word.replace(/^--dbname=/, "");
+    const host = word === "-h" || word === "--host" ? words[i + 1] : /^--host=(.*)$/.exec(word)?.[1];
+    if (host !== void 0) return `db://${host.startsWith("/") ? "" : host}`;
+  }
+  return void 0;
+}
+function lineVariable(commands, name) {
+  let value;
+  const take = (piece) => {
+    const equals = piece.indexOf("=");
+    const key = piece.slice(0, equals).replace(/^\$env:/i, "");
+    if (equals > 0 && key.toLowerCase() === name.toLowerCase()) value = piece.slice(equals + 1);
+  };
+  for (const { assignments, words } of commands) {
+    assignments.forEach(take);
+    if (words[0] === "export") words.slice(1).forEach(take);
+    if (/^\$env:/i.test(words[0] ?? "")) take(words.join(""));
+  }
+  return value;
+}
+function isLocal(url) {
+  if (url === void 0) return false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return parsed.protocol === "file:" || LOCAL_HOSTS.has(host) || host.endsWith(".localhost");
+  } catch {
+    return false;
+  }
+}
+function databaseViolation(text, commands, context) {
+  const sqlClient = commands.find((c) => SQL_CLIENTS.has(programName(c.words[0] ?? "")));
+  const prisma = commands.map((c) => prismaOperation(c.words)).find((op) => op !== void 0);
+  const sql = sqlClient !== void 0 && DESTRUCTIVE_SQL.test(text) ? "DROP or TRUNCATE" : void 0;
+  const operation = prisma ?? sql;
+  if (operation === void 0) return void 0;
+  const url = (sql !== void 0 && sqlClient !== void 0 ? clientUrl(sqlClient.words) : void 0) ?? lineVariable(commands, "DATABASE_URL") ?? context.env("DATABASE_URL") ?? context.dotenv("DATABASE_URL");
+  if (isLocal(url)) return void 0;
+  const why = url === void 0 ? "no DATABASE_URL was found, so it may not be local" : "the database is not local";
+  return {
+    id: "OLDMAN-G04",
+    message: `${operation} destroys data and ${why}. Run it against a local database, or ask the user to run it themselves.`
+  };
+}
+
+// src/lib/paths.ts
+function normalizePath(path) {
+  return path.replaceAll("\\", "/").replace(/^\/([A-Za-z])(?=\/|$)/, "$1:").replace(/^([A-Za-z]):/, (drive) => drive.toLowerCase()).replace(/^\.\//, "");
+}
+function resolvePath(target, base) {
+  const path = normalizePath(target);
+  const absolute = /^[a-z]:/.test(path) || path.startsWith("/") ? path : `${normalizePath(base).replace(/\/+$/, "")}/${path}`;
+  const [, prefix = "", rest = ""] = /^((?:[a-z]:)?\/?)(.*)$/s.exec(absolute) ?? [];
+  const parts = [];
+  for (const part of rest.split("/")) {
+    if (part === "..") {
+      parts.pop();
+    } else if (part !== "" && part !== ".") {
+      parts.push(part);
+    }
+  }
+  return prefix + parts.join("/");
+}
+function isStrictlyInside(path, root) {
+  const base = resolvePath(root, "/").replace(/\/$/, "");
+  const fold = /^[a-z]:/.test(base) ? (p) => p.toLowerCase() : (p) => p;
+  const full = fold(resolvePath(path, base));
+  return full.startsWith(`${fold(base)}/`) && full.length > base.length + 1;
+}
+
+// src/rules/guard-rm.ts
+var REMOVE_ITEM = /* @__PURE__ */ new Set(["remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"]);
+var HOME = /^(?:~|\$HOME|\$\{HOME\}|\$env:HOME|\$env:USERPROFILE|%USERPROFILE%)(?=$|[/\\])/i;
+function rmTargets(args) {
+  let recursive = false;
+  let force = false;
+  const targets = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--") {
+      targets.push(...args.slice(i + 1));
+      break;
+    } else if (arg.startsWith("--")) {
+      recursive ||= arg === "--recursive";
+      force ||= arg === "--force";
+    } else if (arg.startsWith("-") && arg.length > 1) {
+      recursive ||= /[rR]/.test(arg);
+      force ||= arg.includes("f");
+    } else {
+      targets.push(arg);
+    }
+  }
+  return recursive && force ? targets : [];
+}
+var isParameter = (name, parameter, shortest) => name.length >= shortest && parameter.startsWith(name);
+function removeItemTargets(args) {
+  let recursive = false;
+  let force = false;
+  let whatIf = false;
+  const targets = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (!arg.startsWith("-")) {
+      targets.push(arg);
+      continue;
+    }
+    const [name = "", attached] = arg.slice(1).toLowerCase().split(/:(.*)/s);
+    const takesValue = ["path", "literalpath", "lp"].some(
+      (p) => isParameter(name, p, p === "lp" ? 2 : 1)
+    );
+    if (takesValue) {
+      const value = attached ?? args[++i];
+      if (value !== void 0) targets.push(value);
+    } else if (["filter", "include", "exclude", "credential", "stream"].some((p) => isParameter(name, p, 2))) {
+      if (attached === void 0) i++;
+    }
+    recursive ||= isParameter(name, "recurse", 1);
+    force ||= isParameter(name, "force", 2);
+    whatIf ||= isParameter(name, "whatif", 1);
+  }
+  return recursive && force && !whatIf ? targets : [];
+}
+function resolveTarget(target, context) {
+  const expanded = target.replace(HOME, context.home);
+  if (/\$\{?\w|%\w+%/.test(expanded)) return void 0;
+  return resolvePath(expanded, context.cwd);
+}
+function removalViolation(words, dialect, context) {
+  const program = programName(words[0] ?? "");
+  const args = words.slice(1);
+  const targets = dialect === "powershell" && REMOVE_ITEM.has(program) ? removeItemTargets(args) : dialect === "bash" && program === "rm" ? rmTargets(args) : [];
+  const outside = targets.find((target) => {
+    const resolved = resolveTarget(target, context);
+    return resolved !== void 0 && !isStrictlyInside(resolved, context.projectRoot);
+  });
+  if (outside === void 0) return void 0;
+  return {
+    id: "OLDMAN-G03",
+    message: `recursively force-deleting ${outside} reaches outside this project (or deletes the project itself). Delete only paths inside the project, or ask the user to run it themselves.`
+  };
+}
+
 // src/rules/guard-bash.ts
 var forcePush = (target) => ({
   id: "OLDMAN-G01",
@@ -384,15 +571,26 @@ function forcePushViolation(args, git) {
   );
   return protectedTarget === void 0 ? void 0 : forcePush(protectedTarget);
 }
-function checkCommand(text, dialect, git) {
+function gitViolations(words, git) {
+  const invocation = programName(words[0] ?? "") === "git" ? gitInvocation(words) : void 0;
+  const { subcommand, args = [] } = invocation ?? {};
+  if (subcommand === "push") {
+    return [forcePushViolation(args, git), args.includes("--no-verify") ? skipHooks : void 0];
+  }
+  return [subcommand === "commit" && commitSkipsHooks(args) ? skipHooks : void 0];
+}
+function checkCommand(text, dialect, context) {
+  const commands = parseCommands(text, dialect);
   const found = /* @__PURE__ */ new Map();
-  for (const words of splitCommands(text, dialect)) {
-    const invocation = programName(words[0] ?? "") === "git" ? gitInvocation(words) : void 0;
-    const { subcommand, args = [] } = invocation ?? {};
-    const violations = subcommand === "push" ? [forcePushViolation(args, git), args.includes("--no-verify") ? skipHooks : void 0] : [subcommand === "commit" && commitSkipsHooks(args) ? skipHooks : void 0];
-    for (const violation of violations) {
-      if (violation !== void 0 && !found.has(violation.id)) found.set(violation.id, violation);
-    }
+  const violations = [
+    ...commands.flatMap(({ words }) => [
+      ...gitViolations(words, context),
+      removalViolation(words, dialect, context)
+    ]),
+    databaseViolation(text, commands, context)
+  ];
+  for (const violation of violations) {
+    if (violation !== void 0 && !found.has(violation.id)) found.set(violation.id, violation);
   }
   return [...found.values()];
 }
@@ -404,11 +602,17 @@ runHook(() => {
     return failOpen("invalid hook input");
   }
   const { cwd } = input;
-  const { disable } = loadConfig(cwd).config;
+  const projectRoot = process.env.CLAUDE_PROJECT_DIR ?? cwd;
+  const { disable } = loadConfig(projectRoot).config;
   const violations = checkCommand(
     input.tool_input.command,
     input.tool_name === "PowerShell" ? "powershell" : "bash",
     {
+      cwd,
+      projectRoot,
+      home: homedir(),
+      env: (name) => process.env[name],
+      dotenv: (name) => readDotenv(join2(projectRoot, ".env"), name),
       currentBranch: () => currentBranch(cwd),
       defaultBranch: (remote) => defaultBranch(cwd, remote)
     }

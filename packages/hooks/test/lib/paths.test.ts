@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { globToRegExp, isIgnored, normalizePath, toProjectRelative } from '../../src/lib/paths.js';
+import {
+  globToRegExp,
+  isIgnored,
+  isStrictlyInside,
+  normalizePath,
+  resolvePath,
+  toProjectRelative,
+} from '../../src/lib/paths.js';
 
 describe('normalizePath', () => {
   it.each([
@@ -42,6 +49,39 @@ describe('toProjectRelative', () => {
 
   it('is case-sensitive for POSIX roots', () => {
     expect(toProjectRelative('/home/ME/proj/a.ts', '/home/me/proj')).toBe('/home/ME/proj/a.ts');
+  });
+});
+
+describe('resolvePath', () => {
+  it.each([
+    ['dist', 'C:\\repo', 'c:/repo/dist'],
+    ['.\\dist\\..\\out', 'C:\\repo\\', 'c:/repo/out'],
+    ['../other', 'C:\\repo', 'c:/other'],
+    ['../../../..', 'C:\\repo', 'c:/'],
+    ['/etc', 'C:\\repo', '/etc'],
+    ['/c/Windows', '/home/me', 'c:/Windows'],
+    ['C:', 'C:\\repo', 'c:'],
+    ['D:\\data\\.\\x', 'C:\\repo', 'd:/data/x'],
+    ['src/./a', '/home/me/proj', '/home/me/proj/src/a'],
+    ['..', '/', '/'],
+  ])('%s against %s is %s', (target, base, expected) => {
+    expect(resolvePath(target, base)).toBe(expected);
+  });
+});
+
+describe('isStrictlyInside', () => {
+  it.each([
+    ['C:\\repo\\dist', 'C:\\repo', true],
+    ['c:/REPO/dist', 'C:\\Repo\\', true],
+    ['/c/repo/a/b', 'C:\\repo', true],
+    ['C:\\repo', 'C:\\repo', false],
+    ['C:\\repo2', 'C:\\repo', false],
+    ['C:\\', 'C:\\repo', false],
+    ['/home/me/proj/x', '/home/me/proj', true],
+    ['/home/me/PROJ/x', '/home/me/proj', false],
+    ['/home/me', '/home/me/proj', false],
+  ])('%s in %s is %s', (path, root, expected) => {
+    expect(isStrictlyInside(path, root)).toBe(expected);
   });
 });
 
