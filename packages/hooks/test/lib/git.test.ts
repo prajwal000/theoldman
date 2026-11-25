@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readHeadVersion, runGit } from '../../src/lib/git.js';
+import { currentBranch, defaultBranch, readHeadVersion, runGit } from '../../src/lib/git.js';
 
 let dir: string;
 beforeEach(() => {
@@ -110,5 +110,39 @@ describe('runGit', () => {
   it('throws when git fails', () => {
     expect(() => runGit(dir, ['rev-parse', '--show-toplevel'])).toThrow();
     expect(() => runGit(dir, [])).toThrow();
+  });
+});
+
+describe('currentBranch', () => {
+  it('returns the checked-out branch, even before the first commit', () => {
+    const repo = initRepo();
+    gitIn(repo, 'symbolic-ref', 'HEAD', 'refs/heads/feature/x');
+    expect(currentBranch(repo)).toBe('feature/x');
+  });
+
+  it('returns undefined for a detached HEAD or outside a repo', () => {
+    const repo = initRepo();
+    commit(repo, { 'a.ts': 'a\n' });
+    gitIn(repo, 'checkout', '-q', '--detach');
+    expect(currentBranch(repo)).toBeUndefined();
+    expect(currentBranch(dir)).toBeUndefined();
+  });
+});
+
+describe('defaultBranch', () => {
+  it("reads the remote's recorded default branch", () => {
+    const repo = initRepo();
+    gitIn(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+    gitIn(repo, 'symbolic-ref', 'refs/remotes/up.stream/HEAD', 'refs/remotes/up.stream/trunk');
+    expect(defaultBranch(repo, 'origin')).toBe('develop');
+    expect(defaultBranch(repo, 'up.stream')).toBe('trunk');
+  });
+
+  it('returns undefined when it was never recorded or the remote name is not a plain name', () => {
+    const repo = initRepo();
+    expect(defaultBranch(repo, 'origin')).toBeUndefined();
+    for (const remote of ['https://github.com/a/b', '-c', '../x', 'a..b', '']) {
+      expect(defaultBranch(repo, remote)).toBeUndefined();
+    }
   });
 });

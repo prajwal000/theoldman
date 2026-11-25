@@ -77,7 +77,9 @@ export function isToolHookInput(value: unknown): value is ToolHookInput {
 
 export function parseJson(raw: string): unknown {
   try {
-    return JSON.parse(raw) as unknown;
+    // Windows PowerShell 5.1 prefixes piped text with a UTF-8 byte-order mark, which JSON.parse
+    // rejects; a guard must not fail open because of how its input was encoded.
+    return JSON.parse(raw.replace(/^\uFEFF/, '')) as unknown;
   } catch {
     // Malformed JSON is just another invalid input; the type guards reject undefined.
     return undefined;

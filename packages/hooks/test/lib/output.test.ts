@@ -10,6 +10,7 @@ import {
   formatFindings,
   type HookEvent,
   type HookIo,
+  pass,
   runHook,
   warn,
   writeOutput,
@@ -34,6 +35,12 @@ function fakeIo(): { io: HookIo; out: string[]; err: string[] } {
   };
   return { io, out, err };
 }
+
+describe('pass', () => {
+  it('exits 0 with no output', () => {
+    expect(pass()).toEqual({ exitCode: 0, stdout: '', stderr: '' });
+  });
+});
 
 describe('block', () => {
   it('denies a PreToolUse call with the reason', () => {
