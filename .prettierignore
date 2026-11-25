@@ -1,0 +1,2 @@
+# esbuild output: kept as built so the stale check can compare it byte for byte.
+plugin/scripts/

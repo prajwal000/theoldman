@@ -29,6 +29,28 @@ export function runGit(cwd: string, args: readonly string[]): string {
   });
 }
 
+const REMOTE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
+
+function symbolicRef(cwd: string, ref: string): string | undefined {
+  try {
+    return runGit(cwd, ['symbolic-ref', '--quiet', '--short', ref]).trim() || undefined;
+  } catch {
+    // Not a repo, detached HEAD, or no such ref: there is no branch name to report.
+    return undefined;
+  }
+}
+
+/** The checked-out branch, or undefined outside a repo or with a detached HEAD. */
+export function currentBranch(cwd: string): string | undefined {
+  return symbolicRef(cwd, 'HEAD');
+}
+
+/** The remote's default branch as last recorded locally (`refs/remotes/<remote>/HEAD`). */
+export function defaultBranch(cwd: string, remote: string): string | undefined {
+  if (!REMOTE_NAME.test(remote) || remote.includes('..')) return undefined;
+  return symbolicRef(cwd, `refs/remotes/${remote}/HEAD`)?.replace(`${remote}/`, '');
+}
+
 /**
  * The file's committed content at HEAD, or undefined when it has none: outside a repo, no
  * commits yet, untracked or only staged, or git is unavailable.

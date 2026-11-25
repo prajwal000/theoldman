@@ -23,6 +23,11 @@ function json(body: object): HookOutput {
   return { exitCode: 0, stdout: JSON.stringify(body), stderr: '' };
 }
 
+/** Nothing to say: exit 0 with no output, so Claude Code carries on as normal. */
+export function pass(): HookOutput {
+  return { exitCode: 0, stdout: '', stderr: '' };
+}
+
 /** Denies a PreToolUse tool call. The reason is shown to Claude. */
 export function block(reason: string): HookOutput {
   return json({

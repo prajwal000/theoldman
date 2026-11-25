@@ -73,6 +73,7 @@ describe('tool input guards', () => {
 describe('parseJson', () => {
   it('returns parsed JSON or undefined for malformed text', () => {
     expect(parseJson('{"a":1}')).toEqual({ a: 1 });
+    expect(parseJson('\uFEFF{"a":1}\r\n')).toEqual({ a: 1 });
     expect(parseJson('{not json')).toBeUndefined();
     expect(parseJson('')).toBeUndefined();
   });
