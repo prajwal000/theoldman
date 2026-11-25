@@ -1,7 +1,7 @@
 # 0001. TypeScript and Node for everything, including hook scripts
 
 Date: 2026-11-25
-Status: Accepted
+Status: Accepted. Node version superseded by ADR 0005
 
 ## Context
 

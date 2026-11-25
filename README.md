@@ -21,7 +21,7 @@ Nothing leaves your machine. The hook scripts have no dependencies and make no n
 
 ## Install
 
-Requires Claude Code and Node 20+.
+Requires Claude Code and Node 22.13+.
 
 ```text
 /plugin marketplace add prajwal000/theoldman

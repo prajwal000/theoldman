@@ -1,0 +1,25 @@
+{
+  "name": "theoldman",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "lint": "eslint . && prettier --check --no-error-on-unmatched-pattern packages plugin evals site action .github docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
+    "format": "prettier --write --no-error-on-unmatched-pattern packages plugin evals site action .github docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "check": "pnpm lint && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.15.0",
+    "prettier": "^3.10.1",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.74.0",
+    "vitest": "^5.1.1"
+  }
+}
