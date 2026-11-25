@@ -1,6 +1,8 @@
 // What the command guards need to know beyond the command itself. The hook entry fills it from
 // git, the environment and the project; tests use fakes.
 
+import type { PackageScripts } from '../lib/package-scripts.js';
+
 export interface GitContext {
   currentBranch(): string | undefined;
   defaultBranch(remote: string): string | undefined;
@@ -16,6 +18,8 @@ export interface GuardContext extends GitContext {
   env(name: string): string | undefined;
   /** A variable from the project's `.env` file. */
   dotenv(name: string): string | undefined;
+  /** Scripts of the nearest package.json at or above `dir`; read, never run. */
+  packageScripts(dir: string): PackageScripts | undefined;
 }
 
 export interface Violation {

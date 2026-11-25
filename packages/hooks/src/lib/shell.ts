@@ -15,6 +15,11 @@ const SEPARATORS = new Set([';', '|', '&', '(', ')']);
 // `>`, `2>>`, `&>`, `<`, `2>&1`, `>file`: group 1 is a `&N` target, group 2 an attached file.
 const REDIRECT = /^(?:\d*|&)(?:>>?|<<?)(&\d*|&-)?(.*)$/;
 
+/** True when `name` (lower-case, no dash) is an abbreviation PowerShell accepts for `parameter`. */
+export function isAbbreviation(name: string, parameter: string, shortest: number): boolean {
+  return name.length >= shortest && parameter.startsWith(name);
+}
+
 /** Lower-case program name without directory or `.exe`: `C:\Git\bin\git.exe` -> `git`. */
 export function programName(word: string): string {
   return (word.split(/[/\\]/).pop() ?? '').toLowerCase().replace(/\.(?:exe|cmd|bat)$/, '');

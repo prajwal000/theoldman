@@ -42,11 +42,12 @@ describe('OLDMAN-G01 force-push', () => {
 
   it('only asks git when a force-push targets a branch that is not main or master', () => {
     const { git, calls } = fakeGit();
+    const gitCalls = (): string[] => calls.filter((call) => /Branch/.test(call));
     checkCommand('git status && git push origin main && npm test', 'bash', git);
     checkCommand('git push -f origin main', 'bash', git);
-    expect(calls).toEqual([]);
+    expect(gitCalls()).toEqual([]);
     checkCommand('git push -f origin feature/y', 'bash', git);
-    expect(calls).toEqual(['defaultBranch origin']);
+    expect(gitCalls()).toEqual(['defaultBranch origin']);
   });
 
   it('names the rule, the branch and the safe alternative', () => {

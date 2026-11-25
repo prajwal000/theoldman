@@ -29,6 +29,20 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
+## What the guard does not catch
+
+The guard reads each command before it runs and blocks the risky ones: force-push or deleting `main`, `--no-verify`, `rm -rf` outside the project, and resets of a database that is not local. It also looks inside `bash -c`, `cmd /c` and `pwsh -Command` (including `-EncodedCommand`), follows `cd` on the same line, and reads the `package.json` scripts that `npm run`, `pnpm` or `yarn` would start.
+
+It catches honest mistakes, not deliberate evasion. It reads text and does not run a shell, so it cannot see:
+
+- values only known at run time: variables (`rm -rf "$DIR"`), aliases, shell functions and `eval` or `Invoke-Expression` on strings built at run time;
+- what script files do (`./reset.sh`, `pwsh -File deploy.ps1`);
+- the remote's default branch when git never recorded it locally; then only `main` and `master` are protected.
+
+It can also block by mistake: a heredoc that contains a blocked command, or `DROP TABLE` text in a line that also runs `psql`.
+
+To limit what Claude can do at all, use Claude Code's [permission settings](https://code.claude.com/docs/en/permissions) and [sandbox](https://code.claude.com/docs/en/sandboxing). Those are the security boundary; the guard is a safety net on top of them.
+
 ## Development
 
 Requires Node 22.13+ and pnpm.

@@ -1,6 +1,6 @@
 // src/entries/guard-bash.ts
 import { homedir } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 
 // src/lib/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
@@ -183,6 +183,35 @@ function defaultBranch(cwd, remote) {
   return symbolicRef(cwd, `refs/remotes/${remote}/HEAD`)?.replace(`${remote}/`, "");
 }
 
+// src/lib/package-scripts.ts
+import { existsSync, readFileSync as readFileSync4 } from "node:fs";
+import { dirname, join as join2, resolve } from "node:path";
+function readScripts(file) {
+  let value;
+  try {
+    value = parseJson(readFileSync4(file, "utf8"));
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+  const scripts = isRecord(value) ? value.scripts : void 0;
+  if (!isRecord(scripts)) return /* @__PURE__ */ new Map();
+  return new Map(
+    Object.entries(scripts).filter(
+      (entry) => typeof entry[1] === "string"
+    )
+  );
+}
+function findPackageScripts(startDir) {
+  let dir = resolve(startDir);
+  for (; ; ) {
+    const file = join2(dir, "package.json");
+    if (existsSync(file)) return { dir, scripts: readScripts(file) };
+    const parent = dirname(dir);
+    if (parent === dir) return void 0;
+    dir = parent;
+  }
+}
+
 // src/lib/output.ts
 function json(body) {
   return { exitCode: 0, stdout: JSON.stringify(body), stderr: "" };
@@ -223,6 +252,9 @@ var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 var WRAPPERS = /* @__PURE__ */ new Set(["env", "command", "exec", "time", "nohup", "sudo"]);
 var SEPARATORS = /* @__PURE__ */ new Set([";", "|", "&", "(", ")"]);
 var REDIRECT = /^(?:\d*|&)(?:>>?|<<?)(&\d*|&-)?(.*)$/;
+function isAbbreviation(name, parameter, shortest) {
+  return name.length >= shortest && parameter.startsWith(name);
+}
 function programName(word) {
   return (word.split(/[/\\]/).pop() ?? "").toLowerCase().replace(/\.(?:exe|cmd|bat)$/, "");
 }
@@ -326,133 +358,6 @@ function parseCommands(input, dialect) {
   return commands;
 }
 
-// src/rules/git-args.ts
-var GLOBAL_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
-var PUSH_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set(["--repo", "--receive-pack", "--exec", "--push-option"]);
-var COMMIT_OPTIONS_WITH_VALUE = new Set(
-  "--message --file --author --date --reuse-message --reedit-message --fixup --squash --template --cleanup --trailer".split(
-    " "
-  )
-);
-function gitInvocation(words) {
-  for (let i = 1; i < words.length; i++) {
-    const word = words[i] ?? "";
-    if (!word.startsWith("-")) return { subcommand: word, args: words.slice(i + 1) };
-    if (GLOBAL_OPTIONS_WITH_VALUE.has(word)) i++;
-  }
-  return void 0;
-}
-function parsePush(args) {
-  let force = false;
-  let allBranches = false;
-  const positional = [];
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i] ?? "";
-    const name = arg.split("=")[0] ?? arg;
-    if (arg === "--") {
-      positional.push(...args.slice(i + 1));
-      break;
-    } else if (arg.startsWith("--")) {
-      if (name === "--force" || name === "--force-with-lease" || name === "--mirror") force = true;
-      if (name === "--mirror" || name === "--all" || name === "--branches") allBranches = true;
-      if (PUSH_OPTIONS_WITH_VALUE.has(name) && !arg.includes("=")) i++;
-    } else if (arg.startsWith("-") && arg.length > 1) {
-      const letters = arg.slice(1).split("o")[0] ?? "";
-      if (letters.includes("f")) force = true;
-      if (arg.endsWith("o")) i++;
-    } else {
-      positional.push(arg);
-    }
-  }
-  const [remote = "origin", ...refspecs] = positional;
-  return { force, allBranches, remote, refspecs };
-}
-function refspecTarget(refspec) {
-  const spec = refspec.replace(/^\+/, "");
-  const colon = spec.indexOf(":");
-  return (colon === -1 ? spec : spec.slice(colon + 1)).replace(/^refs\/heads\//, "");
-}
-function commitSkipsHooks(args) {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i] ?? "";
-    if (arg === "--") return false;
-    if (arg === "--no-verify") return true;
-    if (arg.startsWith("--")) {
-      if (COMMIT_OPTIONS_WITH_VALUE.has(arg)) i++;
-    } else if (arg.startsWith("-")) {
-      const valueAt = arg.slice(1).search(/[mFCct]/);
-      const letters = valueAt === -1 ? arg.slice(1) : arg.slice(1, valueAt + 1);
-      if (letters.includes("n")) return true;
-      if (valueAt === arg.length - 2) i++;
-    }
-  }
-  return false;
-}
-
-// src/rules/guard-db.ts
-var PACKAGE_RUNNERS = /* @__PURE__ */ new Set(["npx", "pnpx", "bunx", "yarn", "pnpm", "bun", "npm"]);
-var SQL_CLIENTS = /* @__PURE__ */ new Set(["psql", "mysql", "mariadb"]);
-var DESTRUCTIVE_SQL = /\b(?:drop\s+(?:database|table|schema)|truncate)\b/i;
-var LOCAL_HOSTS = /* @__PURE__ */ new Set(["", "localhost", "127.0.0.1", "::1", "0.0.0.0"]);
-function prismaOperation(words) {
-  const at = words.findIndex((word) => programName(word) === "prisma");
-  if (at === -1 || at > 0 && !PACKAGE_RUNNERS.has(programName(words[0] ?? ""))) return void 0;
-  const args = words.slice(at + 1);
-  const [first, second] = args.filter((arg) => !arg.startsWith("-"));
-  if (first === "migrate" && second === "reset") return "prisma migrate reset";
-  if (first === "db" && second === "push" && args.includes("--force-reset")) {
-    return "prisma db push --force-reset";
-  }
-  return void 0;
-}
-function clientUrl(words) {
-  for (let i = 1; i < words.length; i++) {
-    const word = words[i] ?? "";
-    if (word.includes("://")) return word.replace(/^--dbname=/, "");
-    const host = word === "-h" || word === "--host" ? words[i + 1] : /^--host=(.*)$/.exec(word)?.[1];
-    if (host !== void 0) return `db://${host.startsWith("/") ? "" : host}`;
-  }
-  return void 0;
-}
-function lineVariable(commands, name) {
-  let value;
-  const take = (piece) => {
-    const equals = piece.indexOf("=");
-    const key = piece.slice(0, equals).replace(/^\$env:/i, "");
-    if (equals > 0 && key.toLowerCase() === name.toLowerCase()) value = piece.slice(equals + 1);
-  };
-  for (const { assignments, words } of commands) {
-    assignments.forEach(take);
-    if (words[0] === "export") words.slice(1).forEach(take);
-    if (/^\$env:/i.test(words[0] ?? "")) take(words.join(""));
-  }
-  return value;
-}
-function isLocal(url) {
-  if (url === void 0) return false;
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    return parsed.protocol === "file:" || LOCAL_HOSTS.has(host) || host.endsWith(".localhost");
-  } catch {
-    return false;
-  }
-}
-function databaseViolation(text, commands, context) {
-  const sqlClient = commands.find((c) => SQL_CLIENTS.has(programName(c.words[0] ?? "")));
-  const prisma = commands.map((c) => prismaOperation(c.words)).find((op) => op !== void 0);
-  const sql = sqlClient !== void 0 && DESTRUCTIVE_SQL.test(text) ? "DROP or TRUNCATE" : void 0;
-  const operation = prisma ?? sql;
-  if (operation === void 0) return void 0;
-  const url = (sql !== void 0 && sqlClient !== void 0 ? clientUrl(sqlClient.words) : void 0) ?? lineVariable(commands, "DATABASE_URL") ?? context.env("DATABASE_URL") ?? context.dotenv("DATABASE_URL");
-  if (isLocal(url)) return void 0;
-  const why = url === void 0 ? "no DATABASE_URL was found, so it may not be local" : "the database is not local";
-  return {
-    id: "OLDMAN-G04",
-    message: `${operation} destroys data and ${why}. Run it against a local database, or ask the user to run it themselves.`
-  };
-}
-
 // src/lib/paths.ts
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\/([A-Za-z])(?=\/|$)/, "$1:").replace(/^([A-Za-z]):/, (drive) => drive.toLowerCase()).replace(/^\.\//, "");
@@ -478,9 +383,356 @@ function isStrictlyInside(path, root) {
   return full.startsWith(`${fold(base)}/`) && full.length > base.length + 1;
 }
 
+// src/rules/nested.ts
+import { Buffer } from "node:buffer";
+var POSIX_SHELLS = /* @__PURE__ */ new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+var PWSH_VALUE_PARAMETERS = [
+  ["executionpolicy", 2],
+  ["ep", 2],
+  ["windowstyle", 2],
+  ["workingdirectory", 2],
+  ["wd", 2],
+  ["configurationname", 3],
+  ["outputformat", 1],
+  ["inputformat", 2],
+  ["version", 1],
+  ["settingsfile", 1],
+  ["custompipename", 2],
+  ["psconsolefile", 2]
+];
+function posixShellCommand(args) {
+  let command = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (["-o", "+o", "--rcfile", "--init-file"].includes(arg)) {
+      i++;
+    } else if (arg.startsWith("-") || arg.startsWith("+")) {
+      command ||= /^-[^-]*c/.test(arg);
+    } else {
+      return command ? arg : void 0;
+    }
+  }
+  return void 0;
+}
+function decodeBase64Utf16(value) {
+  if (value === void 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return void 0;
+  return Buffer.from(value, "base64").toString("utf16le");
+}
+function powershellCommand(args, windowsPowerShell) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (!arg.startsWith("-")) return windowsPowerShell ? args.slice(i).join(" ") : void 0;
+    const name = arg.slice(1).toLowerCase();
+    if (isAbbreviation(name, "command", 1)) return args.slice(i + 1).join(" ");
+    if (name === "e" || name === "ec" || isAbbreviation(name, "encodedcommand", 2)) {
+      return decodeBase64Utf16(args[i + 1]);
+    }
+    if (isAbbreviation(name, "file", 1)) return void 0;
+    if (PWSH_VALUE_PARAMETERS.some(([p, shortest]) => isAbbreviation(name, p, shortest))) i++;
+  }
+  return void 0;
+}
+function nestedCommand(words) {
+  const program = programName(words[0] ?? "");
+  const args = words.slice(1);
+  let text;
+  let dialect = "bash";
+  if (POSIX_SHELLS.has(program)) {
+    text = posixShellCommand(args);
+  } else if (program === "cmd") {
+    const at = args.findIndex((arg) => /^\/[ck]$/i.test(arg));
+    text = at === -1 ? void 0 : args.slice(at + 1).join(" ");
+    dialect = "powershell";
+  } else if (program === "pwsh" || program === "powershell") {
+    text = powershellCommand(args, program === "powershell");
+    dialect = "powershell";
+  }
+  return text === void 0 || text.trim() === "" ? void 0 : { text, dialect };
+}
+
+// src/rules/wrappers.ts
+var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx"]);
+var EXEC_SUBCOMMANDS = {
+  npm: ["exec", "x"],
+  pnpm: ["exec", "dlx"],
+  yarn: ["exec", "dlx"],
+  bun: ["x"]
+};
+var RUN_SUBCOMMANDS = /* @__PURE__ */ new Set(["run", "run-script", "rum", "urn"]);
+var LIFECYCLE = {
+  test: "test",
+  t: "test",
+  tst: "test",
+  start: "start",
+  stop: "stop",
+  restart: "restart"
+};
+function afterFlags(words, from) {
+  let i = from;
+  while (i < words.length && (words[i] ?? "").startsWith("-")) {
+    i += words[i] === "-p" || words[i] === "--package" ? 2 : 1;
+  }
+  return words.slice(i);
+}
+function unwrapOnce(words, isScript) {
+  const program = programName(words[0] ?? "");
+  const sub = words[1] ?? "";
+  if (RUNNERS.has(program)) return { kind: "command", words: afterFlags(words, 1) };
+  if (!["npm", "pnpm", "yarn", "bun"].includes(program)) return void 0;
+  if (EXEC_SUBCOMMANDS[program]?.includes(sub) === true) {
+    return { kind: "command", words: afterFlags(words, 2) };
+  }
+  if (RUN_SUBCOMMANDS.has(sub)) {
+    const [name] = afterFlags(words, 2);
+    return name === void 0 ? void 0 : { kind: "script", name };
+  }
+  const lifecycle = program === "bun" ? void 0 : LIFECYCLE[sub];
+  if (lifecycle !== void 0) return { kind: "script", name: lifecycle };
+  if (program === "pnpm" || program === "yarn") {
+    return isScript(sub) ? { kind: "script", name: sub } : { kind: "command", words: words.slice(1) };
+  }
+  return void 0;
+}
+function unwrap(words, isScript) {
+  let current = { kind: "command", words };
+  for (let round = 0; round < 3 && current.kind === "command"; round++) {
+    const next = unwrapOnce(current.words, isScript);
+    if (next === void 0) break;
+    current = next;
+  }
+  return current;
+}
+
+// src/rules/command-expand.ts
+var MAX_NESTING = 4;
+var MAX_SCRIPT_CALLS = 2;
+var HOME = /^(?:~|\$HOME|\$\{HOME\}|\$env:HOME|\$env:USERPROFILE|%USERPROFILE%)(?=$|[/\\])/i;
+var CHANGE_DIR = /* @__PURE__ */ new Set(["cd", "chdir", "set-location", "sl", "pushd", "push-location"]);
+var POP_DIR = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+function resolveTarget(target, cwd, home) {
+  const expanded = target.replace(HOME, home);
+  if (/\$\{?\w|%\w+%/.test(expanded)) return void 0;
+  const absolute = /^(?:[A-Za-z]:|[/\\])/.test(expanded);
+  if (cwd === void 0 && !absolute) return void 0;
+  return resolvePath(expanded, cwd ?? "/");
+}
+function setVariable(variables, piece) {
+  const equals = piece.indexOf("=");
+  if (equals <= 0) return;
+  variables.set(
+    piece.slice(0, equals).replace(/^\$env:/i, "").toUpperCase(),
+    piece.slice(equals + 1)
+  );
+}
+function directoryArgument(words, dialect) {
+  const args = words.slice(1);
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    const name = arg.slice(1).toLowerCase();
+    if (dialect === "powershell" && arg.startsWith("-")) {
+      if (isAbbreviation(name, "path", 3) || isAbbreviation(name, "literalpath", 1)) {
+        return args[i + 1] ?? null;
+      }
+    } else if (dialect === "powershell" && name === "d" && arg.startsWith("/")) {
+      continue;
+    } else if (!(dialect === "bash" && arg.startsWith("-") && arg !== "-")) {
+      return arg;
+    }
+  }
+  return null;
+}
+function expandCommands(text, dialect, context) {
+  const units = [];
+  const scriptsByDir = /* @__PURE__ */ new Map();
+  const scriptsAt = (dir) => {
+    if (dir === void 0) return void 0;
+    if (!scriptsByDir.has(dir)) scriptsByDir.set(dir, context.packageScripts(dir));
+    return scriptsByDir.get(dir);
+  };
+  const visit = (line, lineDialect, startCwd, inherited, depth, scriptDepth) => {
+    const variables = new Map(inherited);
+    const commands = [];
+    units.push({ text: line, dialect: lineDialect, commands, variables });
+    let cwd = startCwd;
+    const stack = [];
+    for (const { assignments, words: raw } of parseCommands(line, lineDialect)) {
+      const exported = raw[0] === "export" ? raw.slice(1) : [];
+      for (const piece of [...assignments, ...exported]) setVariable(variables, piece);
+      if (/^\$env:/i.test(raw[0] ?? "")) setVariable(variables, raw.join(""));
+      const unwrapped = unwrap(raw, (name) => scriptsAt(cwd)?.scripts.has(name) ?? false);
+      if (unwrapped.kind === "script") {
+        const pkg = scriptsAt(cwd);
+        if (pkg !== void 0 && depth < MAX_NESTING && scriptDepth <= MAX_SCRIPT_CALLS) {
+          for (const name of [`pre${unwrapped.name}`, unwrapped.name, `post${unwrapped.name}`]) {
+            const script = pkg.scripts.get(name);
+            if (script !== void 0)
+              visit(script, "bash", pkg.dir, variables, depth + 1, scriptDepth + 1);
+          }
+        }
+        continue;
+      }
+      const { words } = unwrapped;
+      const program = programName(words[0] ?? "");
+      if (CHANGE_DIR.has(program)) {
+        if (program === "pushd" || program === "push-location") stack.push(cwd);
+        const target = directoryArgument(words, lineDialect);
+        if (target === null) {
+          if (lineDialect === "bash") cwd = context.home;
+        } else {
+          cwd = target === "-" ? void 0 : resolveTarget(target, cwd, context.home);
+        }
+        continue;
+      }
+      if (POP_DIR.has(program)) {
+        if (stack.length > 0) cwd = stack.pop();
+        continue;
+      }
+      const nested = nestedCommand(words);
+      if (nested !== void 0 && depth < MAX_NESTING) {
+        visit(nested.text, nested.dialect, cwd, variables, depth + 1, scriptDepth);
+      }
+      commands.push({ words, cwd });
+    }
+  };
+  visit(text, dialect, context.cwd, /* @__PURE__ */ new Map(), 0, 0);
+  return units;
+}
+
+// src/rules/git-options.ts
+var options = (names) => {
+  const list = names.split(" ");
+  const negated = list.map((name) => name.startsWith("no-") ? name.slice(3) : `no-${name}`);
+  return [.../* @__PURE__ */ new Set([...list, ...negated])];
+};
+var PUSH_OPTIONS = options(
+  "all branches prune mirror dry-run porcelain delete tags follow-tags signed atomic push-option receive-pack exec force-with-lease force force-if-includes repo set-upstream thin quiet verbose progress recurse-submodules verify ipv4 ipv6"
+);
+var COMMIT_OPTIONS = options(
+  "all patch reuse-message reedit-message fixup squash reset-author short branch porcelain long null file author date message template signoff trailer verify allow-empty allow-empty-message cleanup edit amend post-rewrite include only pathspec-from-file pathspec-file-nul untracked-files verbose quiet dry-run status gpg-sign"
+);
+function longOption(arg, known) {
+  const name = arg.slice(2).split("=")[0] ?? "";
+  if (name === "") return void 0;
+  if (known.includes(name)) return name;
+  const matches = known.filter((option) => option.startsWith(name));
+  return matches.length === 1 ? matches[0] : void 0;
+}
+
+// src/rules/git-args.ts
+var GLOBAL_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace"]);
+var PUSH_OPTIONS_WITH_VALUE = /* @__PURE__ */ new Set(["repo", "receive-pack", "exec", "push-option"]);
+var COMMIT_OPTIONS_WITH_VALUE = new Set(
+  "message file author date reuse-message reedit-message fixup squash template cleanup trailer pathspec-from-file".split(" ")
+);
+function gitInvocation(words) {
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i] ?? "";
+    if (!word.startsWith("-")) return { subcommand: word, args: words.slice(i + 1) };
+    if (GLOBAL_OPTIONS_WITH_VALUE.has(word)) i++;
+  }
+  return void 0;
+}
+function parsePush(args) {
+  const flags = { force: false, allBranches: false, delete: false, noVerify: false };
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--") {
+      positional.push(...args.slice(i + 1));
+      break;
+    } else if (arg.startsWith("--")) {
+      const name = longOption(arg, PUSH_OPTIONS) ?? "";
+      flags.force ||= ["force", "force-with-lease", "mirror"].includes(name);
+      flags.allBranches ||= ["mirror", "all", "branches"].includes(name);
+      flags.delete ||= name === "delete";
+      flags.noVerify ||= name === "no-verify";
+      if (PUSH_OPTIONS_WITH_VALUE.has(name) && !arg.includes("=")) i++;
+    } else if (arg.startsWith("-") && arg.length > 1) {
+      const letters = arg.slice(1).split("o")[0] ?? "";
+      flags.force ||= letters.includes("f");
+      flags.delete ||= letters.includes("d");
+      if (arg.endsWith("o")) i++;
+    } else {
+      positional.push(arg);
+    }
+  }
+  const [remote = "origin", ...refspecs] = positional;
+  return { ...flags, remote, refspecs };
+}
+function refspecTarget(refspec) {
+  const spec = refspec.replace(/^\+/, "");
+  const colon = spec.indexOf(":");
+  return (colon === -1 ? spec : spec.slice(colon + 1)).replace(/^refs\/heads\//, "");
+}
+function commitSkipsHooks(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--") return false;
+    if (arg.startsWith("--")) {
+      const name = longOption(arg, COMMIT_OPTIONS);
+      if (name === "no-verify") return true;
+      if (name !== void 0 && COMMIT_OPTIONS_WITH_VALUE.has(name) && !arg.includes("=")) i++;
+    } else if (arg.startsWith("-")) {
+      const valueAt = arg.slice(1).search(/[mFCct]/);
+      const letters = valueAt === -1 ? arg.slice(1) : arg.slice(1, valueAt + 1);
+      if (letters.includes("n")) return true;
+      if (valueAt === arg.length - 2) i++;
+    }
+  }
+  return false;
+}
+
+// src/rules/guard-db.ts
+var SQL_CLIENTS = /* @__PURE__ */ new Set(["psql", "mysql", "mariadb"]);
+var DESTRUCTIVE_SQL = /\b(?:drop\s+(?:database|table|schema)|truncate)\b/i;
+var LOCAL_HOSTS = /* @__PURE__ */ new Set(["", "localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+function prismaOperation(words) {
+  if (programName(words[0] ?? "") !== "prisma") return void 0;
+  const args = words.slice(1);
+  const [first, second] = args.filter((arg) => !arg.startsWith("-"));
+  if (first === "migrate" && second === "reset") return "prisma migrate reset";
+  if (first === "db" && second === "push" && args.includes("--force-reset")) {
+    return "prisma db push --force-reset";
+  }
+  return void 0;
+}
+function clientUrl(words) {
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i] ?? "";
+    if (word.includes("://")) return word.replace(/^--dbname=/, "");
+    const host = word === "-h" || word === "--host" ? words[i + 1] : /^--host=(.*)$/.exec(word)?.[1];
+    if (host !== void 0) return `db://${host.startsWith("/") ? "" : host}`;
+  }
+  return void 0;
+}
+function isLocal(url) {
+  if (url === void 0) return false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return parsed.protocol === "file:" || LOCAL_HOSTS.has(host) || host.endsWith(".localhost");
+  } catch {
+    return false;
+  }
+}
+function databaseViolation(unit, context) {
+  const { text, commands, variables } = unit;
+  const sqlClient = commands.find((c) => SQL_CLIENTS.has(programName(c.words[0] ?? "")));
+  const prisma = commands.map((c) => prismaOperation(c.words)).find((op) => op !== void 0);
+  const sql = sqlClient !== void 0 && DESTRUCTIVE_SQL.test(text) ? "DROP or TRUNCATE" : void 0;
+  const operation = prisma ?? sql;
+  if (operation === void 0) return void 0;
+  const url = (sql !== void 0 && sqlClient !== void 0 ? clientUrl(sqlClient.words) : void 0) ?? variables.get("DATABASE_URL") ?? context.env("DATABASE_URL") ?? context.dotenv("DATABASE_URL");
+  if (isLocal(url)) return void 0;
+  const why = url === void 0 ? "no DATABASE_URL was found, so it may not be local" : "the database is not local";
+  return {
+    id: "OLDMAN-G04",
+    message: `${operation} destroys data and ${why}. Run it against a local database, or ask the user to run it themselves.`
+  };
+}
+
 // src/rules/guard-rm.ts
 var REMOVE_ITEM = /* @__PURE__ */ new Set(["remove-item", "rm", "ri", "del", "erase", "rd", "rmdir"]);
-var HOME = /^(?:~|\$HOME|\$\{HOME\}|\$env:HOME|\$env:USERPROFILE|%USERPROFILE%)(?=$|[/\\])/i;
 function rmTargets(args) {
   let recursive = false;
   let force = false;
@@ -502,7 +754,6 @@ function rmTargets(args) {
   }
   return recursive && force ? targets : [];
 }
-var isParameter = (name, parameter, shortest) => name.length >= shortest && parameter.startsWith(name);
 function removeItemTargets(args) {
   let recursive = false;
   let force = false;
@@ -516,31 +767,26 @@ function removeItemTargets(args) {
     }
     const [name = "", attached] = arg.slice(1).toLowerCase().split(/:(.*)/s);
     const takesValue = ["path", "literalpath", "lp"].some(
-      (p) => isParameter(name, p, p === "lp" ? 2 : 1)
+      (p) => isAbbreviation(name, p, p === "lp" ? 2 : 1)
     );
     if (takesValue) {
       const value = attached ?? args[++i];
       if (value !== void 0) targets.push(value);
-    } else if (["filter", "include", "exclude", "credential", "stream"].some((p) => isParameter(name, p, 2))) {
+    } else if (["filter", "include", "exclude", "credential", "stream"].some((p) => isAbbreviation(name, p, 2))) {
       if (attached === void 0) i++;
     }
-    recursive ||= isParameter(name, "recurse", 1);
-    force ||= isParameter(name, "force", 2);
-    whatIf ||= isParameter(name, "whatif", 1);
+    recursive ||= isAbbreviation(name, "recurse", 1);
+    force ||= isAbbreviation(name, "force", 2);
+    whatIf ||= isAbbreviation(name, "whatif", 1);
   }
   return recursive && force && !whatIf ? targets : [];
 }
-function resolveTarget(target, context) {
-  const expanded = target.replace(HOME, context.home);
-  if (/\$\{?\w|%\w+%/.test(expanded)) return void 0;
-  return resolvePath(expanded, context.cwd);
-}
-function removalViolation(words, dialect, context) {
+function removalViolation(words, dialect, cwd, context) {
   const program = programName(words[0] ?? "");
   const args = words.slice(1);
   const targets = dialect === "powershell" && REMOVE_ITEM.has(program) ? removeItemTargets(args) : dialect === "bash" && program === "rm" ? rmTargets(args) : [];
   const outside = targets.find((target) => {
-    const resolved = resolveTarget(target, context);
+    const resolved = resolveTarget(target, cwd, context.home);
     return resolved !== void 0 && !isStrictlyInside(resolved, context.projectRoot);
   });
   if (outside === void 0) return void 0;
@@ -551,46 +797,55 @@ function removalViolation(words, dialect, context) {
 }
 
 // src/rules/guard-bash.ts
+var SAFE_ALTERNATIVE = "or ask the user to run it themselves.";
 var forcePush = (target) => ({
   id: "OLDMAN-G01",
-  message: `force-pushing to ${target} rewrites history others depend on. Push to a new branch and open a pull request, or ask the user to run the force-push themselves.`
+  message: `force-pushing to ${target} rewrites history others depend on. Push to a new branch and open a pull request, ${SAFE_ALTERNATIVE}`
+});
+var deleteBranch = (target) => ({
+  id: "OLDMAN-G01",
+  message: `deleting ${target} on the remote removes a branch others depend on. Delete only your own feature branches, ${SAFE_ALTERNATIVE}`
 });
 var skipHooks = {
   id: "OLDMAN-G02",
   message: "--no-verify skips the git hooks that check this repo. Fix what the hook reports, then commit or push without --no-verify."
 };
-function forcePushViolation(args, git) {
-  const { force, allBranches, remote, refspecs } = parsePush(args);
-  if (allBranches) {
-    return force ? forcePush("every branch, including the default branch") : void 0;
-  }
-  const forced = refspecs.length > 0 ? refspecs.filter((s) => force || s.startsWith("+")) : force ? ["HEAD"] : [];
-  const targets = forced.map(refspecTarget).map((t) => t === "HEAD" || t === "@" ? git.currentBranch() : t);
-  const protectedTarget = targets.find(
-    (branch) => branch !== void 0 && branch !== "" && (branch === "main" || branch === "master" || branch === git.defaultBranch(remote))
-  );
-  return protectedTarget === void 0 ? void 0 : forcePush(protectedTarget);
+function pushViolations(args, git) {
+  const push = parsePush(args);
+  const isProtected = (branch) => branch !== void 0 && branch !== "" && (branch === "main" || branch === "master" || branch === git.defaultBranch(push.remote));
+  const deleted = push.delete ? push.refspecs.map(refspecTarget) : push.refspecs.filter((s) => s.startsWith(":")).map(refspecTarget);
+  const pushed = push.refspecs.filter((s) => !s.startsWith(":"));
+  const forced = push.refspecs.length > 0 ? pushed.filter((s) => push.force || s.startsWith("+")) : push.force ? ["HEAD"] : [];
+  const forcedTargets = forced.map(refspecTarget).map((t) => t === "HEAD" || t === "@" ? git.currentBranch() : t);
+  const deletedTarget = deleted.find(isProtected);
+  const forcedTarget = push.allBranches ? void 0 : forcedTargets.find(isProtected);
+  return [
+    push.allBranches && push.force ? forcePush("every branch, including the default branch") : void 0,
+    deletedTarget === void 0 ? void 0 : deleteBranch(deletedTarget),
+    forcedTarget === void 0 || push.delete ? void 0 : forcePush(forcedTarget),
+    push.noVerify ? skipHooks : void 0
+  ];
 }
 function gitViolations(words, git) {
   const invocation = programName(words[0] ?? "") === "git" ? gitInvocation(words) : void 0;
-  const { subcommand, args = [] } = invocation ?? {};
-  if (subcommand === "push") {
-    return [forcePushViolation(args, git), args.includes("--no-verify") ? skipHooks : void 0];
-  }
-  return [subcommand === "commit" && commitSkipsHooks(args) ? skipHooks : void 0];
+  if (invocation?.subcommand === "push") return pushViolations(invocation.args, git);
+  return [
+    invocation?.subcommand === "commit" && commitSkipsHooks(invocation.args) ? skipHooks : void 0
+  ];
 }
 function checkCommand(text, dialect, context) {
-  const commands = parseCommands(text, dialect);
   const found = /* @__PURE__ */ new Map();
-  const violations = [
-    ...commands.flatMap(({ words }) => [
-      ...gitViolations(words, context),
-      removalViolation(words, dialect, context)
-    ]),
-    databaseViolation(text, commands, context)
-  ];
-  for (const violation of violations) {
-    if (violation !== void 0 && !found.has(violation.id)) found.set(violation.id, violation);
+  for (const unit of expandCommands(text, dialect, context)) {
+    const violations = [
+      ...unit.commands.flatMap(({ words, cwd }) => [
+        ...gitViolations(words, context),
+        removalViolation(words, unit.dialect, cwd, context)
+      ]),
+      databaseViolation(unit, context)
+    ];
+    for (const violation of violations) {
+      if (violation !== void 0 && !found.has(violation.id)) found.set(violation.id, violation);
+    }
   }
   return [...found.values()];
 }
@@ -612,7 +867,8 @@ runHook(() => {
       projectRoot,
       home: homedir(),
       env: (name) => process.env[name],
-      dotenv: (name) => readDotenv(join2(projectRoot, ".env"), name),
+      dotenv: (name) => readDotenv(join3(projectRoot, ".env"), name),
+      packageScripts: (dir) => findPackageScripts(dir),
       currentBranch: () => currentBranch(cwd),
       defaultBranch: (remote) => defaultBranch(cwd, remote)
     }
