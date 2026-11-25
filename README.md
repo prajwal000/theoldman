@@ -29,6 +29,18 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
+## Development
+
+Requires Node 22.13+ and pnpm.
+
+```text
+pnpm install
+pnpm check    # lint, typecheck, tests, and a check that plugin/scripts is up to date
+pnpm build    # bundles packages/hooks into plugin/scripts
+```
+
+The bundles in `plugin/scripts` are committed, because the plugin installs from git with no build step. Run `pnpm build` after changing hook code and commit the result.
+
 ## Docs
 
 - [Decisions](docs/adr/)
