@@ -78,20 +78,32 @@ describe('diffAddedLines', () => {
     ]);
   });
 
-  it('diffs a 2,000-line file in under 300 ms', () => {
+  describe('on a 2,000-line file', () => {
     const before = Array.from(
       { length: 2000 },
       (_, i) => `const value${String(i)} = ${String(i)};`,
     );
-    const scattered = before.map((line, i) => (i % 7 === 0 ? `${line} // changed` : line));
-    const rewritten = before.map((line) => `${line} // rewritten`);
-    for (const after of [scattered, rewritten]) {
+    const block = before.slice(300, 1700);
+    // The slowest change the exact diff still takes: 1,400 shared lines in a different order.
+    const swappedBlock = [
+      ...before.slice(0, 300),
+      ...block.slice(700),
+      ...block.slice(0, 700),
+      ...before.slice(1700),
+    ];
+
+    it.each([
+      ['a scattered edit', before.map((l, i) => (i % 7 === 0 ? `${l} // changed` : l)), 286],
+      ['a full rewrite', before.map((l) => `${l} // rewritten`), 2000],
+      ['every line reordered', before.toReversed(), 0],
+      ['a reordered 1,400-line block', swappedBlock, 700],
+    ])('diffs %s in under 300 ms', (_name, after, addedCount) => {
       const startedAt = performance.now();
       const added = diffAddedLines(lines(...before), lines(...after));
       const elapsed = performance.now() - startedAt;
-      expect(added.length).toBe(after === rewritten ? 2000 : 286);
+      expect(added).toHaveLength(addedCount);
       expect(elapsed).toBeLessThan(300);
-    }
+    });
   });
 });
 
