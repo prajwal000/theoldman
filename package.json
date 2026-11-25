@@ -7,11 +7,12 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "lint": "eslint . && prettier --check --no-error-on-unmatched-pattern packages plugin evals site action .github .claude-plugin docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
-    "format": "prettier --write --no-error-on-unmatched-pattern packages plugin evals site action .github .claude-plugin docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
+    "lint": "eslint . && prettier --check --no-error-on-unmatched-pattern packages plugin evals site action scripts .github .claude-plugin docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
+    "format": "prettier --write --no-error-on-unmatched-pattern packages plugin evals site action scripts .github .claude-plugin docs/adr README.md CHANGELOG.md package.json pnpm-workspace.yaml tsconfig.base.json eslint.config.js vitest.config.ts .prettierrc",
+    "build": "pnpm --filter @theoldman/hooks build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run --coverage",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "check": "pnpm lint && pnpm typecheck && pnpm test && node scripts/check-built.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

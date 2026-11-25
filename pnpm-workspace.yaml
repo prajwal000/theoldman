@@ -1,2 +1,6 @@
 packages:
   - packages/*
+# esbuild's install script only verifies the platform binary, which pnpm already installs as an
+# optional dependency, so no dependency is allowed to run install scripts.
+allowBuilds:
+  esbuild: false
