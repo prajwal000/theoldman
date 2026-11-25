@@ -1,0 +1,14 @@
+{
+  "name": "theoldman",
+  "owner": { "name": "prajwal000" },
+  "metadata": {
+    "description": "Marketplace for theoldman, a Claude Code plugin with senior-developer rules, guards and reviews."
+  },
+  "plugins": [
+    {
+      "name": "theoldman",
+      "source": "./plugin",
+      "description": "Senior-developer rules, guards and reviews for Claude Code."
+    }
+  ]
+}
