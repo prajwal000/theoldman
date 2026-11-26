@@ -1,5 +1,5 @@
 {
-  "description": "theoldman guards: block risky shell commands, writes to env and key files, and secrets.",
+  "description": "theoldman: guard risky commands, env and key files and secrets; check comments and code quality after edits.",
   "hooks": {
     "PreToolUse": [
       {
@@ -20,6 +20,19 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/guard-write.mjs"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/check-file.mjs"],
             "timeout": 10
           }
         ]

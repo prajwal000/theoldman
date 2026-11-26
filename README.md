@@ -29,6 +29,10 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
+## Checks after each edit
+
+After each Write or Edit, theoldman checks the lines Claude added for change-narration comments, commented-out code, TODOs with no issue or owner, banner comments, `any`, `console.log`, empty `catch` blocks and `debugger`. Findings are listed as `OLDMAN-C01 src/a.ts:12 <message>` and Claude is asked to fix them. Some, like comments that repeat the code, are passed on as warnings only. After `maxFeedbackRounds` requests per kind of check (default 2) in a session, theoldman stops asking and records what is left. Session state lives in `.theoldman/`, which contains its own `.gitignore`, so git ignores it without changes to yours. Use `disable` and `ignorePaths` in `.theoldman.json` to turn rules or paths off.
+
 ## What the guard does not catch
 
 The guard reads each command before it runs and blocks the risky ones: force-push or deleting `main`, `--no-verify`, `rm -rf` outside the project, and resets of a database that is not local. It also looks inside `bash -c`, `cmd /c` and `pwsh -Command` (including `-EncodedCommand`), follows `cd` on the same line, and reads the `package.json` scripts that `npm run`, `pnpm` or `yarn` would start.

@@ -34,7 +34,7 @@ describe('plugin/hooks/hooks.json', () => {
     expect(registrations().length).toBeGreaterThan(0);
   });
 
-  it('registers the guards on the tools they check', () => {
+  it('registers the guards and the checks on the tools they cover', () => {
     expect(
       registrations().map(({ event, matcher, hook }) => {
         const args: unknown[] = isRecord(hook) && Array.isArray(hook.args) ? hook.args : [];
@@ -43,6 +43,7 @@ describe('plugin/hooks/hooks.json', () => {
     ).toEqual([
       ['PreToolUse', 'Bash|PowerShell', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-bash.mjs'],
       ['PreToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-write.mjs'],
+      ['PostToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/check-file.mjs'],
     ]);
   });
 

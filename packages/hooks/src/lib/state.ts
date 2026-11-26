@@ -4,6 +4,8 @@ import { isRecord, parseJson } from './input.js';
 
 const PAUSED_FILE = 'paused';
 const ROUNDS_FILE = 'rounds.json';
+const TOUCHED_FILE = 'touched.json';
+const CAPPED_FILE = 'capped.json';
 // Session IDs become directory names, so anything that could form a path (`..`, `/`, `\`, `:`) is refused.
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -24,7 +26,12 @@ function ensureStateDir(projectDir: string, ...segments: string[]): string {
   let dir = projectDir;
   for (const segment of ['.theoldman', 'state', ...segments]) {
     dir = join(dir, segment);
-    if (!existsSync(dir)) mkdirSync(dir);
+    if (!existsSync(dir)) {
+      mkdirSync(dir);
+      // Keeps state out of git without editing the project's own .gitignore. Only written into
+      // a folder created just now, so an existing .theoldman/ is left as the user has it.
+      if (segment === '.theoldman') writeFileSync(join(dir, '.gitignore'), '*\n');
+    }
     if (lstatSync(dir).isSymbolicLink()) {
       throw new Error(`${segment} is a symbolic link; refusing to write state through it`);
     }
@@ -72,4 +79,64 @@ export function addRound(projectDir: string, sessionId: string, check: string): 
   rounds.set(check, next);
   writeFileSync(file, JSON.stringify(Object.fromEntries(rounds)));
   return next;
+}
+
+const isStringArray = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+/** A JSON file in the session's state directory; missing or corrupt reads as undefined. */
+function readSessionJson(projectDir: string, sessionId: string, name: string): unknown {
+  const file = join(stateDir(projectDir), sessionSegment(sessionId), name);
+  return existsSync(file) ? parseJson(readFileSync(file, 'utf8')) : undefined;
+}
+
+function writeSessionJson(
+  projectDir: string,
+  sessionId: string,
+  name: string,
+  value: unknown,
+): void {
+  writeFileSync(
+    join(ensureStateDir(projectDir, sessionSegment(sessionId)), name),
+    JSON.stringify(value),
+  );
+}
+
+/** Files written or edited in this session, project-relative, for the Stop hook. */
+export function touchedFiles(projectDir: string, sessionId: string): string[] {
+  const value = readSessionJson(projectDir, sessionId, TOUCHED_FILE);
+  return isStringArray(value) ? value : [];
+}
+
+export function recordTouchedFile(projectDir: string, sessionId: string, file: string): void {
+  const files = touchedFiles(projectDir, sessionId);
+  if (!files.includes(file))
+    writeSessionJson(projectDir, sessionId, TOUCHED_FILE, [...files, file]);
+}
+
+/** Findings not sent to Claude because the feedback cap was reached, per file, for the summary. */
+export function cappedFindings(projectDir: string, sessionId: string): Record<string, string[]> {
+  const value = readSessionJson(projectDir, sessionId, CAPPED_FILE);
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string[]] => isStringArray(entry[1])),
+  );
+}
+
+/** Replaces the capped findings for `file`; an empty list clears them, as the file is fixed. */
+export function recordCappedFindings(
+  projectDir: string,
+  sessionId: string,
+  file: string,
+  findings: readonly string[],
+): void {
+  const all = cappedFindings(projectDir, sessionId);
+  if (findings.length === 0 && !(file in all)) return;
+  const others = Object.fromEntries(Object.entries(all).filter(([key]) => key !== file));
+  writeSessionJson(
+    projectDir,
+    sessionId,
+    CAPPED_FILE,
+    findings.length > 0 ? { ...others, [file]: findings } : others,
+  );
 }
