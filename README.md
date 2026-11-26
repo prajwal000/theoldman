@@ -29,6 +29,10 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
+## Rules at session start
+
+When a session starts, and again after `/clear` or compaction, theoldman gives Claude a short summary of the core rules and the stack it found in `package.json`. Set `stack` in `.theoldman.json` to override the detected stack. At level `quick` the summary is left out.
+
 ## Checks after each edit
 
 After each Write or Edit, theoldman checks the lines Claude added for change-narration comments, commented-out code, TODOs with no issue or owner, banner comments, `any`, `console.log`, empty `catch` blocks and `debugger`. Findings are listed as `OLDMAN-C01 src/a.ts:12 <message>` and Claude is asked to fix them. Some, like comments that repeat the code, are passed on as warnings only. After `maxFeedbackRounds` requests per kind of check (default 2) in a session, theoldman stops asking and records what is left. Session state lives in `.theoldman/`, which contains its own `.gitignore`, so git ignores it without changes to yours. Use `disable` and `ignorePaths` in `.theoldman.json` to turn rules or paths off.

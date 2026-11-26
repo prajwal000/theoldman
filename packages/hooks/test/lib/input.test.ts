@@ -3,11 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  isCommonInput,
   isEditToolInput,
+  isPromptHookInput,
   isShellToolInput,
   isToolHookInput,
   isWriteToolInput,
   parseJson,
+  readHookInput,
   readToolHookInput,
 } from '../../src/lib/input.js';
 
@@ -70,6 +73,17 @@ describe('tool input guards', () => {
   });
 });
 
+describe('event input guards', () => {
+  it('accept the common fields alone, and a prompt only as a string', () => {
+    const start = { ...common, hook_event_name: 'SessionStart', source: 'startup' };
+    expect(isCommonInput(start)).toBe(true);
+    expect(isCommonInput({ ...start, cwd: undefined })).toBe(false);
+    expect(isPromptHookInput({ ...common, prompt: 'fix the login bug' })).toBe(true);
+    expect(isPromptHookInput({ ...common, prompt: ['x'] })).toBe(false);
+    expect(isPromptHookInput(start)).toBe(false);
+  });
+});
+
 describe('parseJson', () => {
   it('returns parsed JSON or undefined for malformed text', () => {
     expect(parseJson('{"a":1}')).toEqual({ a: 1 });
@@ -108,5 +122,17 @@ describe('readToolHookInput', () => {
     expect(readFrom(JSON.stringify({ ...common, tool_name: 'Bash', tool_input: {} }))).toBe(
       undefined,
     );
+  });
+
+  it('reads other events with the guard it is given', () => {
+    const file = join(dir, 'prompt.json');
+    const prompt = { ...common, hook_event_name: 'UserPromptSubmit', prompt: 'hi' };
+    writeFileSync(file, JSON.stringify(prompt));
+    const fd = openSync(file, 'r');
+    try {
+      expect(readHookInput(isPromptHookInput, fd)).toEqual(prompt);
+    } finally {
+      closeSync(fd);
+    }
   });
 });

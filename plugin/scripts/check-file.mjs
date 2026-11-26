@@ -160,10 +160,11 @@ function isWriteToolInput(value) {
 function isEditToolInput(value) {
   return isRecord(value) && typeof value.file_path === "string" && typeof value.old_string === "string" && typeof value.new_string === "string" && (value.replace_all === void 0 || typeof value.replace_all === "boolean");
 }
+function isCommonInput(value) {
+  return isRecord(value) && typeof value.session_id === "string" && typeof value.cwd === "string" && typeof value.hook_event_name === "string";
+}
 function isToolHookInput(value) {
-  if (!isRecord(value) || typeof value.session_id !== "string" || typeof value.cwd !== "string" || typeof value.hook_event_name !== "string") {
-    return false;
-  }
+  if (!isCommonInput(value)) return false;
   switch (value.tool_name) {
     case "Bash":
     case "PowerShell":
@@ -183,9 +184,12 @@ function parseJson(raw) {
     return void 0;
   }
 }
-function readToolHookInput(fd = 0) {
+function readHookInput(isValid, fd = 0) {
   const value = parseJson(readFileSync(fd, "utf8"));
-  return isToolHookInput(value) ? value : void 0;
+  return isValid(value) ? value : void 0;
+}
+function readToolHookInput(fd = 0) {
+  return readHookInput(isToolHookInput, fd);
 }
 
 // src/lib/config.ts

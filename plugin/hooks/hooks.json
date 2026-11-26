@@ -1,6 +1,18 @@
 {
-  "description": "theoldman: guard risky commands, env and key files and secrets; check comments and code quality after edits.",
+  "description": "theoldman: give Claude the core rules at session start; guard risky commands, env and key files and secrets; check comments and code quality after edits.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",
