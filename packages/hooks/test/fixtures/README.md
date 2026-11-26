@@ -32,17 +32,21 @@ Every line of a fixture counts as added, as if Claude had just written the file.
 ## Using the harness
 
 ```ts
-import { assertFast, runRuleOnFixtures } from '../harness.js';
+// In the rule's test file:
+import { runRuleOnFixtures } from '../harness.js';
 import { c01 } from '../../src/rules/comments.js';
 
 runRuleOnFixtures('OLDMAN-C01', c01);
 
-it('OLDMAN-C01 is fast', () => {
+// In test/performance.perf.test.ts:
+it('OLDMAN-C01', () => {
   assertFast(c01);
 });
 ```
 
-`runRuleOnFixtures` adds one test per fixture. A test fails on a missing or unexpected finding, a finding that names another file, or one with an empty message. `assertFast` runs the rule once on a generated 2,000-line file and fails at 300 ms or more; pass `generate` for input that is not TypeScript, such as shell commands.
+`runRuleOnFixtures` adds one test per fixture. A test fails on a missing or unexpected finding, a finding that names another file, or one with an empty message.
+
+`assertFast` runs the rule 5 times on a generated 2,000-line file and fails when the median run takes 300 ms or more; pass `generate` for input that is not TypeScript, such as shell commands. Put every speed check in `test/performance.perf.test.ts`: that file runs in its own Vitest project after all the other tests, so parallel test files cannot slow it down.
 
 Fixtures must not contain real secrets or personal data. The OLDMAN-S01 fixtures write secrets as `{{fake:name}}` placeholders, which `../rules/fake-secrets.ts` fills in at run time from pieces, so no secret-shaped string is ever committed and GitHub secret scanning has nothing to flag.
 

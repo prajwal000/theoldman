@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkCommand, guardBashRule } from '../../src/rules/guard-bash.js';
-import { assertFast, runRuleOnFixtures } from '../harness.js';
+import { runRuleOnFixtures } from '../harness.js';
 import { fakeContext } from './fake-context.js';
 import { FAKE_SECRETS, fillFakes } from './fake-secrets.js';
 
@@ -139,20 +139,5 @@ describe('checkCommand', () => {
     expect(checkCommand('git', 'bash', git)).toEqual([]);
     expect(checkCommand('git --version', 'bash', git)).toEqual([]);
     expect(checkCommand('gitk push -f origin main', 'bash', git)).toEqual([]);
-  });
-
-  it('is fast on 2,000 command lines', () => {
-    const commands = [
-      'git push -f origin main',
-      'npm test && git commit -m "x" --no-verify',
-      '$env:FOO=1; git push --force origin master',
-      'echo "git push -f origin main" | tee log.txt',
-      'rm -rf ./dist /etc && Remove-Item -Recurse -Force ..\\other',
-      'DATABASE_URL=postgresql://localhost/app npx prisma migrate reset && psql -c "DROP TABLE t"',
-    ];
-    assertFast(guardBashRule(fakeGit().git), {
-      generate: (index) => commands[index % commands.length] ?? '',
-      file: 'commands.sh',
-    });
   });
 });

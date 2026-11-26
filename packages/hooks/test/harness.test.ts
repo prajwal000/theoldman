@@ -3,9 +3,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Finding, Rule, RuleInput } from '../src/lib/rules.js';
+import type { Finding, Rule } from '../src/lib/rules.js';
 import {
-  assertFast,
   fixtureProblems,
   FIXTURES_ROOT,
   loadFixtures,
@@ -167,48 +166,5 @@ describe('fixtureProblems', () => {
     expect(fixtureProblems('OLDMAN-T01', () => [finding(1, { file: 'b.ts' })], good)).toEqual([
       'unexpected OLDMAN-T01@1',
     ]);
-  });
-});
-
-describe('assertFast', () => {
-  it('runs the rule once on 2,000 generated TypeScript lines, all added', () => {
-    const seen: RuleInput[] = [];
-    const elapsed = assertFast((input) => {
-      seen.push(input);
-      return dummy(input);
-    });
-    expect(elapsed).toBeLessThan(300);
-    expect(seen).toHaveLength(1);
-    const [input] = seen;
-    expect(input?.file).toBe('generated.ts');
-    expect(input?.addedLines).toHaveLength(2000);
-    expect(input?.addedLines.at(-1)?.line).toBe(2000);
-    expect(input?.content.split('\n')).toHaveLength(2001);
-    expect(input?.content).toContain('// Prisma returns null');
-  });
-
-  it('accepts a line generator and file name for other input', () => {
-    let first = '';
-    let file = '';
-    assertFast(
-      (input) => {
-        first = input.addedLines[0]?.text ?? '';
-        file = input.file;
-        return [];
-      },
-      { generate: (index) => `git status # ${String(index)}`, file: 'commands.sh' },
-    );
-    expect([first, file]).toEqual(['git status # 0', 'commands.sh']);
-  });
-
-  it('fails a rule that takes 300 ms or more', () => {
-    const slow: Rule = () => {
-      const until = performance.now() + 320;
-      while (performance.now() < until) {
-        // Busy-wait: the point of this rule is to be slow.
-      }
-      return [];
-    };
-    expect(() => assertFast(slow)).toThrow(/rule took \d+\.\d ms on 2,000 lines/);
   });
 });
