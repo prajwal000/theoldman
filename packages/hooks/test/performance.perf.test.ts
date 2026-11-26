@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { diffAddedLines } from '../src/lib/added-lines.js';
 import { extractComments } from '../src/lib/comments.js';
 import type { Rule, RuleInput } from '../src/lib/rules.js';
+import { c02, c03 } from '../src/rules/comment-code.js';
 import { c01, c04, c05 } from '../src/rules/comments.js';
 import { guardBashRule } from '../src/rules/guard-bash.js';
 import { guardWriteRule } from '../src/rules/guard-write.js';
@@ -125,6 +126,8 @@ describe('extractComments on a 2,000-line file', () => {
 describe('comment rules on 2,000 lines', () => {
   it.each([
     ['OLDMAN-C01', c01],
+    ['OLDMAN-C02', c02],
+    ['OLDMAN-C03', c03],
     ['OLDMAN-C04', c04],
     ['OLDMAN-C05', c05],
   ])('%s', (_id, rule) => {

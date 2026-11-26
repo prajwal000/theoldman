@@ -27,7 +27,8 @@ export function addedCommentLines(input: RuleInput): CommentLine[] {
     .filter(({ line, text }) => text !== '' && added.has(line));
 }
 
-const REFERENCE = /https?:\/\/\S|#\d+\b/;
+/** A URL or an issue reference: such a comment points somewhere, so it is not narration. */
+export const REFERENCE = /https?:\/\/\S|#\d+\b/;
 
 /** `word` at the start of a comment, followed by `:`, the end, or one of `follows`. */
 const verb = (word: string, follows: string): RegExp =>
