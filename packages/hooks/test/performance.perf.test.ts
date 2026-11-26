@@ -12,7 +12,7 @@ import { c06 } from '../src/rules/comment-density.js';
 import { runChecks } from '../src/rules/check.js';
 import { c01, c04, c05 } from '../src/rules/comments.js';
 import { guardBashRule } from '../src/rules/guard-bash.js';
-import { guardWriteRule } from '../src/rules/guard-write.js';
+import { docsWriterRule, guardWriteRule } from '../src/rules/guard-write.js';
 import { q01, q02, q03, q04 } from '../src/rules/quality.js';
 import { secretsRule } from '../src/rules/secrets.js';
 import { assertFast, medianMs, SPEED_LIMIT_MS, SPEED_RUNS } from './harness.js';
@@ -175,6 +175,14 @@ describe('guard rules on 2,000 lines', () => {
   it('guard-write', () => {
     const paths = ['src/a.ts', 'apps/web/.env.local', 'C:\\keys\\server.key', '.env.example'];
     assertFast(guardWriteRule(), {
+      generate: (i) => paths[i % paths.length] ?? '',
+      file: 'paths.txt',
+    });
+  });
+
+  it('docs-writer paths', () => {
+    const paths = ['README.md', 'src/a.ts', 'docs/../src/b.md', 'C:\\repo\\docs\\adr\\1.md'];
+    assertFast(docsWriterRule('/home/me/proj'), {
       generate: (i) => paths[i % paths.length] ?? '',
       file: 'paths.txt',
     });

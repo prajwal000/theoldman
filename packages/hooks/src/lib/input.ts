@@ -21,6 +21,8 @@ export interface CommonInput {
   readonly session_id: string;
   readonly cwd: string;
   readonly hook_event_name: string;
+  /** Set by Claude Code when a subagent makes the call, e.g. `theoldman:oldman-docs-writer`. */
+  readonly agent_type?: string;
 }
 
 export interface PromptHookInput extends CommonInput {
@@ -63,7 +65,8 @@ export function isCommonInput(value: unknown): value is CommonInput & Record<str
     isRecord(value) &&
     typeof value.session_id === 'string' &&
     typeof value.cwd === 'string' &&
-    typeof value.hook_event_name === 'string'
+    typeof value.hook_event_name === 'string' &&
+    (value.agent_type === undefined || typeof value.agent_type === 'string')
   );
 }
 

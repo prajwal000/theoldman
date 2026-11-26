@@ -27,7 +27,7 @@ function isEditToolInput(value) {
   return isRecord(value) && typeof value.file_path === "string" && typeof value.old_string === "string" && typeof value.new_string === "string" && (value.replace_all === void 0 || typeof value.replace_all === "boolean");
 }
 function isCommonInput(value) {
-  return isRecord(value) && typeof value.session_id === "string" && typeof value.cwd === "string" && typeof value.hook_event_name === "string";
+  return isRecord(value) && typeof value.session_id === "string" && typeof value.cwd === "string" && typeof value.hook_event_name === "string" && (value.agent_type === void 0 || typeof value.agent_type === "string");
 }
 function isToolHookInput(value) {
   if (!isCommonInput(value)) return false;
@@ -176,10 +176,38 @@ function runHook(handler, io = process) {
 function normalizePath(path) {
   return path.replaceAll("\\", "/").replace(/^\/([A-Za-z])(?=\/|$)/, "$1:").replace(/^([A-Za-z]):/, (drive) => drive.toLowerCase()).replace(/^\.\//, "");
 }
+function toProjectRelative(filePath, projectDir) {
+  const file = normalizePath(filePath);
+  const root = normalizePath(projectDir).replace(/\/+$/, "");
+  const fold = /^[a-z]:/.test(root) ? (p) => p.toLowerCase() : (p) => p;
+  return fold(file).startsWith(`${fold(root)}/`) ? file.slice(root.length + 1) : file;
+}
+function resolvePath(target, base) {
+  const path = normalizePath(target);
+  const absolute = /^[a-z]:/.test(path) || path.startsWith("/") ? path : `${normalizePath(base).replace(/\/+$/, "")}/${path}`;
+  const [, prefix = "", rest = ""] = /^((?:[a-z]:)?\/?)(.*)$/s.exec(absolute) ?? [];
+  const parts = [];
+  for (const part of rest.split("/")) {
+    if (part === "..") {
+      parts.pop();
+    } else if (part !== "" && part !== ".") {
+      parts.push(part);
+    }
+  }
+  return prefix + parts.join("/");
+}
+function isStrictlyInside(path, root) {
+  const base = resolvePath(root, "/").replace(/\/$/, "");
+  const fold = /^[a-z]:/.test(base) ? (p) => p.toLowerCase() : (p) => p;
+  const full = fold(resolvePath(path, base));
+  return full.startsWith(`${fold(base)}/`) && full.length > base.length + 1;
+}
 
 // src/rules/guard-write.ts
 var SSH_KEY = /^id_(?:rsa|dsa|ecdsa|ed25519)/;
 var KEY_EXTENSION = /\.(?:pem|key)$/;
+var DOCS_WRITER = "theoldman:oldman-docs-writer";
+var DOC_NAME = /^(?:(?:readme|changelog)(?:[.-][\w-]+)*\.(?:md|mdx|markdown|txt|rst|adoc)|readme|changelog|\.env\.example|(?:openapi|swagger)(?:\.[\w-]+)*\.(?:json|ya?ml))$/;
 function fileName(path) {
   return (normalizePath(path).split("/").pop() ?? "").toLowerCase();
 }
@@ -198,6 +226,20 @@ function checkPath(path) {
     };
   }
   return void 0;
+}
+function isDocPath(path, projectDir) {
+  const root = resolvePath(projectDir, "/");
+  if (!isStrictlyInside(path, root)) return false;
+  const relative = toProjectRelative(resolvePath(path, root), root).toLowerCase();
+  const name = relative.split("/").pop() ?? "";
+  return DOC_NAME.test(name) || relative.startsWith("docs/") && name.endsWith(".md");
+}
+function checkAgentPath(path, projectDir, agentType, cwd = projectDir) {
+  if (agentType !== DOCS_WRITER || isDocPath(resolvePath(path, cwd), projectDir)) return void 0;
+  return {
+    id: "OLDMAN-G07",
+    message: `${path} is not a documentation file. The docs writer may only change README and CHANGELOG files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.`
+  };
 }
 
 // src/rules/secrets.ts
@@ -278,8 +320,10 @@ runHook(() => {
     id: "OLDMAN-S01",
     message: secretMessage(file, { ...finding, line: finding.line + offset })
   }));
-  const { disable } = loadConfig(process.env.CLAUDE_PROJECT_DIR ?? input.cwd).config;
-  const violations = [checkPath(file), ...secrets].filter(
+  const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  const { disable } = loadConfig(root).config;
+  const agentPath = checkAgentPath(file, root, input.agent_type, input.cwd);
+  const violations = [checkPath(file), agentPath, ...secrets].filter(
     (violation) => violation !== void 0 && !disable.includes(violation.id)
   );
   if (violations.length === 0) return pass();

@@ -116,6 +116,32 @@ describe('guard-write hook', () => {
     for (const value of Object.values(FAKE_SECRETS)) expect(run.stdout).not.toContain(value);
   });
 
+  it('limits the docs-writer subagent to documentation files, by agent_type', () => {
+    const asAgent = (stdin: string, agentType: string): string =>
+      JSON.stringify({ ...(JSON.parse(stdin) as object), agent_id: 'a1', agent_type: agentType });
+    const docsWriter = 'theoldman:oldman-docs-writer';
+    const env = { CLAUDE_PROJECT_DIR: project };
+    expect(reason(runGuard(asAgent(write(join(project, 'src', 'a.ts')), docsWriter), env))).toMatch(
+      /^OLDMAN-G07: .*a\.ts is not a documentation file\./,
+    );
+    const edit = input('Edit', {
+      file_path: 'README.md',
+      old_string: 'a',
+      new_string: 'b',
+      replace_all: false,
+    });
+    expect(runGuard(asAgent(edit, docsWriter), env).stdout).toBe('');
+    expect(runGuard(asAgent(write('docs/adr/0001-x.md'), docsWriter), env).stdout).toBe('');
+    expect(runGuard(write(join(project, 'src', 'a.ts')), env).stdout).toBe('');
+    const reviewer = asAgent(write(join(project, 'src', 'a.ts')), 'theoldman:oldman-reviewer');
+    expect(runGuard(reviewer, env).stdout).toBe('');
+  });
+
+  it('fails open when agent_type is not a string', () => {
+    const stdin = JSON.stringify({ ...(JSON.parse(write('a.ts')) as object), agent_type: 1 });
+    expect(runGuard(stdin).status).toBe(1);
+  });
+
   it('skips a rule listed in disable in the project root config', () => {
     const configured = join(root, 'configured');
     mkdirSync(join(configured, 'sub'), { recursive: true });

@@ -1,0 +1,16 @@
+README.md
+README
+readme.MD
+README.fr.md
+packages/api/README.md
+CHANGELOG.md
+changelog.txt
+docs/adr/0007-eval-runner.md
+Docs\Setup.MD
+/home/me/proj/docs/guide.md
+./docs/api/routes.md
+.env.example
+apps/web/.env.example
+openapi.yaml
+docs/api/openapi.json
+swagger.v2.yml
