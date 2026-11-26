@@ -10,6 +10,8 @@ export interface DiffFile {
   readonly status: 'added' | 'modified' | 'deleted';
   /** Added lines, numbered as in the new file. */
   readonly addedLines: readonly AddedLine[];
+  /** How many lines the change removed. */
+  readonly removedLines: number;
 }
 
 // Repository config is untrusted: diff.external and textconv drivers run programs, and
@@ -98,7 +100,12 @@ function filePath(line: string, prefix: string): string {
 
 /** The files and added lines of a unified diff from `git diff` or `workingTreeDiff`. */
 export function parseDiff(diff: string): DiffFile[] {
-  const files: { path: string; status: DiffFile['status']; addedLines: AddedLine[] }[] = [];
+  const files: {
+    path: string;
+    status: DiffFile['status'];
+    addedLines: AddedLine[];
+    removedLines: number;
+  }[] = [];
   let current: (typeof files)[number] | undefined;
   // Header lines come before a file's first hunk; inside hunks, `+++ x` is an added line.
   let inHunk = false;
@@ -108,7 +115,7 @@ export function parseDiff(diff: string): DiffFile[] {
       // Without renames both sides name the same path: `a/<path> b/<path>`.
       const rest = line.slice('diff --git '.length);
       const path = unquote(rest.slice(0, (rest.length - 1) / 2)).slice(2);
-      current = { path, status: 'modified', addedLines: [] };
+      current = { path, status: 'modified', addedLines: [], removedLines: 0 };
       files.push(current);
       inHunk = false;
     } else if (current === undefined) {
@@ -119,6 +126,7 @@ export function parseDiff(diff: string): DiffFile[] {
     } else if (inHunk) {
       if (line.startsWith('+')) current.addedLines.push({ line: next, text: line.slice(1) });
       if (line.startsWith('+') || line.startsWith(' ')) next += 1;
+      if (line.startsWith('-')) current.removedLines += 1;
     } else if (line.startsWith('new file mode')) {
       current.status = 'added';
     } else if (line.startsWith('deleted file mode')) {

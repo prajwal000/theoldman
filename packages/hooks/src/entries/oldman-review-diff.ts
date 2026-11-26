@@ -4,9 +4,11 @@
 // subagents read the file. The diff is against where the branch left the default branch, and
 // includes uncommitted and untracked files; on the default branch it is the uncommitted work.
 
+import { fileURLToPath } from 'node:url';
 import { parseDiff, workingTreeDiff } from '../lib/diff.js';
 import { branchBase } from '../lib/git.js';
 import { runHook, say } from '../lib/output.js';
+import { reviewSkills, sessionCategories, writeReviewRules } from '../lib/review-scope.js';
 import { writeSessionFile } from '../lib/state.js';
 
 runHook(() => {
@@ -24,5 +26,10 @@ runHook(() => {
   const files = parseDiff(diff).length;
   if (files === 0) return say(`No changes against ${against}, so there is nothing to review.`);
   const path = writeSessionFile(projectDir, sessionId, 'diff.patch', diff);
-  return say(`Diff of ${String(files)} changed file(s) against ${against} written to ${path}`);
+  const changed = parseDiff(diff).map((file) => file.path);
+  const skills = reviewSkills(changed, sessionCategories(projectDir, sessionId));
+  const pluginRoot = fileURLToPath(new URL('..', import.meta.url));
+  const rules = writeReviewRules(pluginRoot, projectDir, sessionId, skills);
+  const summary = `Diff of ${String(files)} changed file(s) against ${against} written to ${path}`;
+  return say(rules === undefined ? summary : `${summary}\nTopic rules for this change: ${rules}`);
 });

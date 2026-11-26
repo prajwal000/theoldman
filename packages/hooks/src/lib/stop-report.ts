@@ -5,8 +5,12 @@ import type { Finding } from './rules.js';
 const MAX_LISTED = 20;
 
 export interface StopReport {
+  /** `light`: Claude checks the diff itself; `full` (default): the reviewer and verifier do. */
+  readonly kind?: 'light' | 'full';
   /** Set when Claude should have this diff file reviewed. */
   readonly diffPath?: string | undefined;
+  /** The topic rules the reviewer and verifier read, for a full review. */
+  readonly rulesPath?: string | undefined;
   /** Docs findings to fix now (OLDMAN-D01). */
   readonly fixes: readonly Finding[];
   /** Findings left after the feedback limit, already formatted one per line. */
@@ -29,22 +33,41 @@ function section(title: string, lines: readonly string[]): string[] {
 const asLines = (findings: readonly Finding[]): string[] =>
   findings.length === 0 ? [] : formatFindings(findings).split('\n');
 
+const LIGHT_CHECKS =
+  'wrong conditions and off-by-one errors, unhandled null or errors, missing await, missing authentication or ownership checks, unvalidated input, queries without a limit, and new behaviour without a test';
+
+function reviewSteps(kind: 'light' | 'full', diffPath: string, rulesPath?: string): string[] {
+  if (kind === 'light') {
+    return [
+      `1. This change is small, so check it yourself, without subagents: go over the lines you changed for ${LIGHT_CHECKS}. The diff is at ${diffPath} if you need it. Fix what you find, then run the tests again.`,
+    ];
+  }
+  const rules = rulesPath === undefined ? '' : ` Read the topic rules in ${rulesPath} first.`;
+  const files = rulesPath === undefined ? 'the same diff path' : 'the same diff and rules paths';
+  return [
+    `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.${rules}`,
+    `2. If the reviewer's reply is exactly "No issues found.", skip this step. Otherwise run the theoldman:oldman-verifier subagent with ${files} and the reviewer's full reply.`,
+    '3. Fix every confirmed Critical and Important finding, then run the tests again. Mention confirmed Nits in your summary.',
+  ];
+}
+
 /** The `reason` of a Stop block: what Claude must do before finishing, then the notes. */
-export function blockReason({ diffPath, fixes, capped, notes }: StopReport): string {
+export function blockReason(report: StopReport): string {
+  const { kind = 'full', diffPath, rulesPath, fixes, capped, notes } = report;
   const steps: string[] = [];
   if (diffPath !== undefined) {
-    const apiDocs = notes.some((note) => note.id === 'OLDMAN-D02')
-      ? ' Also check whether the API docs need an update for the changed routes.'
-      : '';
-    steps.push(
-      `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.${apiDocs}`,
-      "2. Run the theoldman:oldman-verifier subagent with the same diff path and the reviewer's full reply.",
-      '3. Fix every confirmed Critical and Important finding, then run the tests again. Mention confirmed Nits in your summary.',
-    );
+    steps.push(...reviewSteps(kind, diffPath, rulesPath));
+    if (notes.some((note) => note.id === 'OLDMAN-D02')) {
+      steps[0] = `${steps[0] ?? ''} Also check whether the API docs need an update for the changed routes.`;
+    }
   }
   if (fixes.length > 0) {
     steps.push(`${String(steps.length + 1)}. Fix these docs findings:`, ...asLines(fixes));
   }
+  // Claude already summarised its work once; a second full summary costs tokens and says little new.
+  steps.push(
+    'Then reply in one or two lines with what this step found or changed. Do not repeat your earlier summary.',
+  );
   return [
     'theoldman: code changed in this session. Before you finish:',
     ...steps,
