@@ -16,10 +16,15 @@ export interface EditToolInput {
   readonly replace_all?: boolean;
 }
 
-interface CommonInput {
+/** The fields every hook event sends. */
+export interface CommonInput {
   readonly session_id: string;
   readonly cwd: string;
   readonly hook_event_name: string;
+}
+
+export interface PromptHookInput extends CommonInput {
+  readonly prompt: string;
 }
 
 export type ToolHookInput = CommonInput &
@@ -53,15 +58,21 @@ export function isEditToolInput(value: unknown): value is EditToolInput {
   );
 }
 
+export function isCommonInput(value: unknown): value is CommonInput & Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.session_id === 'string' &&
+    typeof value.cwd === 'string' &&
+    typeof value.hook_event_name === 'string'
+  );
+}
+
+export function isPromptHookInput(value: unknown): value is PromptHookInput {
+  return isCommonInput(value) && typeof value.prompt === 'string';
+}
+
 export function isToolHookInput(value: unknown): value is ToolHookInput {
-  if (
-    !isRecord(value) ||
-    typeof value.session_id !== 'string' ||
-    typeof value.cwd !== 'string' ||
-    typeof value.hook_event_name !== 'string'
-  ) {
-    return false;
-  }
+  if (!isCommonInput(value)) return false;
   switch (value.tool_name) {
     case 'Bash':
     case 'PowerShell':
@@ -86,8 +97,12 @@ export function parseJson(raw: string): unknown {
   }
 }
 
-/** Reads all of stdin (fd 0 by default) and returns it only if it is valid tool hook input. */
-export function readToolHookInput(fd = 0): ToolHookInput | undefined {
+/** Reads all of stdin (fd 0 by default) and returns it only if `isValid` accepts it. */
+export function readHookInput<T>(isValid: (value: unknown) => value is T, fd = 0): T | undefined {
   const value = parseJson(readFileSync(fd, 'utf8'));
-  return isToolHookInput(value) ? value : undefined;
+  return isValid(value) ? value : undefined;
+}
+
+export function readToolHookInput(fd = 0): ToolHookInput | undefined {
+  return readHookInput(isToolHookInput, fd);
 }
