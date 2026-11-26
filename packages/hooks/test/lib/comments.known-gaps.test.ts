@@ -3,7 +3,9 @@ import { describe, it } from 'vitest';
 // Cases the comment extractor gets wrong because it scans tokens instead of parsing. Each is rare
 // in real code; turn one into a real test if it starts causing false findings.
 describe('comment extractor known gaps', () => {
-  it.todo('JSX text that contains // or /*, as in <p>http://example.com</p>, is read as a comment');
+  it.todo(
+    'JSX text with // or /* not right after a URL scheme, as in <p>a // b</p>, is read as a comment',
+  );
   it.todo(
     'a regex right after a closing parenthesis, as in if (ok) /x\\/\\/y/.test(s), is read as division',
   );

@@ -23,9 +23,16 @@ describe('extractComments', () => {
     expect(
       extractComments('// own line\nconst a = 1; //   trailing  \n/// <reference types="node" />'),
     ).toEqual([
-      { line: 1, endLine: 1, text: 'own line', kind: 'line', trailing: false },
-      { line: 2, endLine: 2, text: 'trailing', kind: 'line', trailing: true },
-      { line: 3, endLine: 3, text: '/ <reference types="node" />', kind: 'line', trailing: false },
+      { line: 1, endLine: 1, text: 'own line', lines: ['own line'], kind: 'line', trailing: false },
+      { line: 2, endLine: 2, text: 'trailing', lines: ['trailing'], kind: 'line', trailing: true },
+      {
+        line: 3,
+        endLine: 3,
+        text: '/ <reference types="node" />',
+        lines: ['/ <reference types="node" />'],
+        kind: 'line',
+        trailing: false,
+      },
     ]);
   });
 
@@ -33,11 +40,38 @@ describe('extractComments', () => {
     const source =
       '/* one */\n/**\n * Two lines\n *   of docs\n */\nconst x = 1; /* three\n   lines */\n/**/ /***/';
     expect(extractComments(source)).toEqual([
-      { line: 1, endLine: 1, text: 'one', kind: 'block', trailing: false },
-      { line: 2, endLine: 5, text: 'Two lines\nof docs', kind: 'jsdoc', trailing: false },
-      { line: 6, endLine: 7, text: 'three\nlines', kind: 'block', trailing: true },
-      { line: 8, endLine: 8, text: '', kind: 'block', trailing: false },
-      { line: 8, endLine: 8, text: '', kind: 'jsdoc', trailing: false },
+      { line: 1, endLine: 1, text: 'one', lines: ['one'], kind: 'block', trailing: false },
+      {
+        line: 2,
+        endLine: 5,
+        text: 'Two lines\nof docs',
+        lines: ['', 'Two lines', 'of docs', ''],
+        kind: 'jsdoc',
+        trailing: false,
+      },
+      {
+        line: 6,
+        endLine: 7,
+        text: 'three\nlines',
+        lines: ['three', 'lines'],
+        kind: 'block',
+        trailing: true,
+      },
+      { line: 8, endLine: 8, text: '', lines: [''], kind: 'block', trailing: false },
+      { line: 8, endLine: 8, text: '', lines: [''], kind: 'jsdoc', trailing: false },
+    ]);
+  });
+
+  it('in .jsx and .tsx, reads // right after a URL scheme as text, not a comment', () => {
+    const source = '<p>Docs at https://example.com/guide</p>; // real\n<a>http://x.dev</a>';
+    expect(extractComments(source, 'src/Docs.tsx').map((c) => c.text)).toEqual(['real']);
+    expect(extractComments(source, 'Docs.JSX').map((c) => c.text)).toEqual(['real']);
+    expect(extractComments(source, 'docs.ts').map((c) => c.text)).toEqual([
+      'example.com/guide</p>; // real',
+      'x.dev</a>',
+    ]);
+    expect(extractComments('const a = b ? c : // why\n  d;', 'a.tsx').map((c) => c.text)).toEqual([
+      'why',
     ]);
   });
 
