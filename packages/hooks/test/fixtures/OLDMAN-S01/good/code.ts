@@ -1,0 +1,12 @@
+export const apiKey = process.env.API_KEY;
+export const token = import.meta.env.VITE_TOKEN;
+export const secret = config.get('secret');
+export const dbPassword = getPassword();
+export const sortKey = 'createdAt';
+export const cacheKey = `user:${id}`;
+export const STRIPE_SECRET = process.env.STRIPE_SECRET ?? '';
+export const awsRegion = 'us-east-1';
+export const commitSha = '{{fake:hex-secret}}';
+export const publicKey = '{{fake:high-entropy}}';
+export const hint = 'Set OPENAI_API_KEY in your env file, never in code.';
+export const prefix = 'sk-ant-';

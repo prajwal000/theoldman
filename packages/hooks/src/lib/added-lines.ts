@@ -117,6 +117,16 @@ export function diffAddedLines(oldText: string, newText: string): AddedLine[] {
   }));
 }
 
+/**
+ * How many whole lines of `content` come before the first occurrence of `snippet`, so line N of
+ * the snippet is line N + offset of the file; undefined if the snippet is not found.
+ */
+export function lineOffset(content: string, snippet: string): number | undefined {
+  const file = content.replaceAll('\r\n', '\n');
+  const index = file.indexOf(snippet.replaceAll('\r\n', '\n'));
+  return index === -1 ? undefined : file.slice(0, index).split('\n').length - 1;
+}
+
 /** Added lines of a Write: the new content compared with the file at HEAD, if it has one. */
 export function addedLinesForWrite(filePath: string, content: string): AddedLine[] {
   return diffAddedLines(readHeadVersion(filePath) ?? '', content);
@@ -130,11 +140,9 @@ export function addedLinesForWrite(filePath: string, content: string): AddedLine
 export function addedLinesForEdit(edit: EditToolInput, fileContent?: string): AddedLine[] {
   const added = diffAddedLines(edit.old_string, edit.new_string);
   if (fileContent === undefined || added.length === 0) return added;
-  const file = fileContent.replaceAll('\r\n', '\n');
-  const index = file.indexOf(edit.new_string.replaceAll('\r\n', '\n'));
-  if (index === -1) return added;
-  const offset = file.slice(0, index).split('\n').length - 1;
-  const fileLines = splitLines(file);
+  const offset = lineOffset(fileContent, edit.new_string);
+  if (offset === undefined) return added;
+  const fileLines = splitLines(fileContent);
   return added.map(({ line }) => ({
     line: line + offset,
     text: fileLines[line + offset - 1] ?? '',

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildHooks } from '../../build.mjs';
+import { FAKE_SECRETS } from '../rules/fake-secrets.js';
 
 const root = mkdtempSync(join(tmpdir(), 'theoldman-guard-write-'));
 const outDir = join(root, 'scripts');
@@ -37,8 +38,8 @@ const input = (toolName: string, toolInput: object, cwd = project): string =>
     tool_input: toolInput,
   });
 
-const write = (filePath: string, cwd = project): string =>
-  input('Write', { file_path: filePath, content: 'X=1\n' }, cwd);
+const write = (filePath: string, content = 'X=1\n', cwd = project): string =>
+  input('Write', { file_path: filePath, content }, cwd);
 
 function reason(run: ReturnType<typeof runGuard>): unknown {
   expect(run.status).toBe(0);
@@ -78,13 +79,50 @@ describe('guard-write hook', () => {
     });
   });
 
+  it('denies a Write whose content holds a secret, naming the line but never the value', () => {
+    const secret = FAKE_SECRETS['stripe-live'] ?? '';
+    const run = runGuard(
+      write(join(project, 'src', 'pay.ts'), `// pay\nconst key = '${secret}';\n`),
+    );
+    expect(reason(run)).toMatch(/^OLDMAN-S01: .*pay\.ts:2 looks like a Stripe live key\./);
+    expect(run.stdout + run.stderr).not.toContain(secret);
+    expect(run.stdout + run.stderr).not.toContain(secret.slice(-8));
+  });
+
+  it('numbers an Edit by its line in the current file', () => {
+    const file = join(project, 'config.ts');
+    writeFileSync(file, 'line 1\nline 2\nconst apiKey = OLD;\n');
+    const secret = FAKE_SECRETS['high-entropy'] ?? '';
+    const edit = {
+      file_path: file,
+      old_string: 'const apiKey = OLD;',
+      new_string: `const apiKey = '${secret}';`,
+      replace_all: false,
+    };
+    const run = runGuard(input('Edit', edit));
+    expect(reason(run)).toMatch(/config\.ts:3 looks like a secret value assigned to apiKey\./);
+    expect(run.stdout).not.toContain(secret);
+    const missing = input('Edit', { ...edit, file_path: join(project, 'none.ts') });
+    expect(reason(runGuard(missing))).toMatch(/none\.ts:1 looks like/);
+  });
+
+  it('lists at most five findings and counts the rest', () => {
+    const lines = Object.values(FAKE_SECRETS).map((value) => `const serviceToken = '${value}';`);
+    const run = runGuard(write(join(project, '.env.local'), lines.join('\n')));
+    const listed = String(reason(run)).split('\n');
+    expect(listed).toHaveLength(6);
+    expect(listed[0]).toMatch(/^OLDMAN-G05: /);
+    expect(listed[5]).toBe(`...and ${String(lines.length + 1 - 5)} more.`);
+    for (const value of Object.values(FAKE_SECRETS)) expect(run.stdout).not.toContain(value);
+  });
+
   it('skips a rule listed in disable in the project root config', () => {
     const configured = join(root, 'configured');
     mkdirSync(join(configured, 'sub'), { recursive: true });
     writeFileSync(join(configured, '.theoldman.json'), JSON.stringify({ disable: ['OLDMAN-G05'] }));
     const env = { CLAUDE_PROJECT_DIR: configured };
-    expect(runGuard(write('.env', join(configured, 'sub')), env).stdout).toBe('');
-    expect(reason(runGuard(write('server.key', join(configured, 'sub')), env))).toMatch(
+    expect(runGuard(write('.env', 'X=1\n', join(configured, 'sub')), env).stdout).toBe('');
+    expect(reason(runGuard(write('server.key', 'X=1\n', join(configured, 'sub')), env))).toMatch(
       /^OLDMAN-G06/,
     );
   });

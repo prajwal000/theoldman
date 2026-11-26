@@ -3,7 +3,14 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  globalIgnores(['coverage/', 'site/dist/', 'evals/runs/', 'plugin/scripts/']),
+  globalIgnores([
+    'coverage/',
+    'site/dist/',
+    'evals/runs/',
+    'plugin/scripts/',
+    // Rule fixtures are deliberately bad code, checked by the rule harness, not by lint.
+    'packages/hooks/test/fixtures/',
+  ]),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
   {

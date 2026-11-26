@@ -1,2 +1,4 @@
 # esbuild output: kept as built so the stale check can compare it byte for byte.
 plugin/scripts/
+# Rule fixtures: their line numbers are part of the test, so they must not be reformatted.
+packages/hooks/test/fixtures/

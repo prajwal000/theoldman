@@ -1,3 +1,13 @@
+// src/entries/guard-write.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+
+// src/lib/added-lines.ts
+function lineOffset(content, snippet) {
+  const file = content.replaceAll("\r\n", "\n");
+  const index = file.indexOf(snippet.replaceAll("\r\n", "\n"));
+  return index === -1 ? void 0 : file.slice(0, index).split("\n").length - 1;
+}
+
 // src/lib/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
 import { join } from "node:path";
@@ -186,16 +196,90 @@ function checkPath(path) {
   return void 0;
 }
 
+// src/rules/secrets.ts
+var PROVIDER_PATTERNS = [
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "an AWS access key ID"],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, "a GitHub token"],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, "a GitHub token"],
+  [/\b[rs]k_live_[A-Za-z0-9]{16,}\b/g, "a Stripe live key"],
+  [/\bsk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_-]{20,}/g, "an Anthropic API key"],
+  [/\bsk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/g, "an OpenAI API key"],
+  [/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g, "a private key block"]
+];
+var ASSIGNMENT = /["']?([A-Za-z_][\w.-]*)["']?\s*[:=]\s*(["'`]?)([^\s"'`,;]+)\2/g;
+var SECRET_NAME = /(?:_(?:secret|key|token)|password)$/i;
+var CAMEL_SECRET_NAME = /[a-z0-9](?:Secret|Key|Token)$/;
+var PUBLIC_NAME = /public|publishable/i;
+var PLACEHOLDER = /your[-_ ]?[a-z_-]*here|change[-_ ]?me|placeholder|example|dummy|sample|redacted|x{4}|\*{3}|^<.*>$|^\$\{?\w+\}?$|^\{\{.*\}\}$|^(.)\1+$/i;
+var CODE_REFERENCE = /^(?:process\.env|import\.meta\.env|os\.environ|env\b)|^[$<{]|\(/;
+function isPlaceholder(value) {
+  return PLACEHOLDER.test(value);
+}
+function entropy(value) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1);
+  let bits = 0;
+  for (const count of counts.values()) {
+    const p = count / value.length;
+    bits -= p * Math.log2(p);
+  }
+  return bits;
+}
+function looksRandom(value) {
+  return value.length >= 16 && /\d/.test(value) && /[A-Za-z]/.test(value) && entropy(value) >= 3.2;
+}
+function assignedSecret(line) {
+  for (const match of line.matchAll(ASSIGNMENT)) {
+    const [, name = "", , value = ""] = match;
+    const secretName = SECRET_NAME.test(name) || CAMEL_SECRET_NAME.test(name);
+    if (!secretName || PUBLIC_NAME.test(name) || isPlaceholder(value)) continue;
+    if (!CODE_REFERENCE.test(value) && looksRandom(value))
+      return `a secret value assigned to ${name}`;
+  }
+  return void 0;
+}
+function secretKind(line) {
+  for (const [pattern, kind] of PROVIDER_PATTERNS) {
+    if ([...line.matchAll(pattern)].some(([token]) => !isPlaceholder(token))) return kind;
+  }
+  return assignedSecret(line);
+}
+function scanSecrets(text) {
+  return text.split(/\r?\n/).flatMap((line, index) => {
+    const kind = secretKind(line);
+    return kind === void 0 ? [] : [{ line: index + 1, kind }];
+  });
+}
+function secretMessage(file, finding) {
+  return `${file}:${String(finding.line)} looks like ${finding.kind}. Do not write secrets into files: read the value from an environment variable and keep it out of the repo.`;
+}
+
 // src/entries/guard-write.ts
+var MAX_LISTED = 5;
+function editOffset(file, oldString) {
+  try {
+    return lineOffset(readFileSync3(file, "utf8"), oldString) ?? 0;
+  } catch {
+    return 0;
+  }
+}
 runHook(() => {
   const input = readToolHookInput();
   if (input === void 0 || input.tool_name !== "Write" && input.tool_name !== "Edit") {
     return failOpen("invalid hook input");
   }
-  const projectRoot = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
-  const violation = checkPath(input.tool_input.file_path);
-  if (violation === void 0 || loadConfig(projectRoot).config.disable.includes(violation.id)) {
-    return pass();
-  }
-  return block(`${violation.id}: ${violation.message}`);
+  const file = input.tool_input.file_path;
+  const [text, offset] = input.tool_name === "Write" ? [input.tool_input.content, 0] : [input.tool_input.new_string, editOffset(file, input.tool_input.old_string)];
+  const secrets = scanSecrets(text).map((finding) => ({
+    id: "OLDMAN-S01",
+    message: secretMessage(file, { ...finding, line: finding.line + offset })
+  }));
+  const { disable } = loadConfig(process.env.CLAUDE_PROJECT_DIR ?? input.cwd).config;
+  const violations = [checkPath(file), ...secrets].filter(
+    (violation) => violation !== void 0 && !disable.includes(violation.id)
+  );
+  if (violations.length === 0) return pass();
+  const listed = violations.slice(0, MAX_LISTED).map(({ id, message }) => `${id}: ${message}`);
+  const more = violations.length - listed.length;
+  return block([...listed, ...more > 0 ? [`...and ${String(more)} more.`] : []].join("\n"));
 });
