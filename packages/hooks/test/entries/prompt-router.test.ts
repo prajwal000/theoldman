@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,9 @@ const root = mkdtempSync(join(tmpdir(), 'theoldman-prompt-router-'));
 // The script finds the skills next to its own folder, as in the installed plugin.
 const plugin = join(root, 'plugin');
 const bare = join(root, 'bare');
+// tell.md exists but cannot be read as a file, or has no section for the prompt's category.
+const unreadable = join(root, 'unreadable');
+const empty = join(root, 'empty');
 const project = join(root, 'project');
 
 beforeAll(async () => {
@@ -22,7 +25,10 @@ beforeAll(async () => {
       recursive: true,
     },
   );
-  await buildHooks({ outDir: join(bare, 'scripts') });
+  for (const dir of [bare, unreadable, empty]) await buildHooks({ outDir: join(dir, 'scripts') });
+  mkdirSync(join(unreadable, 'skills', 'oldman-rules', 'tell.md'), { recursive: true });
+  mkdirSync(join(empty, 'skills', 'oldman-rules'), { recursive: true });
+  writeFileSync(join(empty, 'skills', 'oldman-rules', 'tell.md'), '# Title\n\n## core\n\n- x\n');
   mkdirSync(project);
 });
 afterAll(() => {
@@ -73,14 +79,24 @@ describe('prompt-router hook', () => {
     expect(runRouter('Add tests for the parser', paused)).toEqual(silent);
   });
 
-  it('fails open on invalid input or when the rules file is missing', () => {
+  it('fails open on invalid input', () => {
     expect(runRouter(42)).toEqual({
       status: 1,
       stdout: '',
       stderr: 'theoldman: invalid hook input\n',
     });
-    const missing = runRouter('Add tests for the parser', project, bare);
-    expect(missing.status).toBe(1);
-    expect(missing.stdout).toBe('');
+  });
+
+  // Exit 1 is a non-blocking error: the prompt goes through unchanged, nothing is added to
+  // Claude's context, and only one short line goes to stderr.
+  it.each([
+    ['missing', bare],
+    ['unreadable', unreadable],
+    ['without a section for the category', empty],
+  ])('fails open, adding no context, when tell.md is %s', (_name, pluginDir) => {
+    const run = runRouter('Add tests for the parser', project, pluginDir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toMatch(/^theoldman: [^\n]+\n$/);
   });
 });

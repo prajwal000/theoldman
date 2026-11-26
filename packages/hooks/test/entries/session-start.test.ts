@@ -11,6 +11,9 @@ const root = mkdtempSync(join(tmpdir(), 'theoldman-session-start-'));
 // The script finds the skills next to its own folder, as in the installed plugin.
 const plugin = join(root, 'plugin');
 const bare = join(root, 'bare');
+// tell.md exists but cannot be read as a file, or has no core section.
+const unreadable = join(root, 'unreadable');
+const empty = join(root, 'empty');
 
 beforeAll(async () => {
   await buildHooks({ outDir: join(plugin, 'scripts') });
@@ -21,7 +24,10 @@ beforeAll(async () => {
       recursive: true,
     },
   );
-  await buildHooks({ outDir: join(bare, 'scripts') });
+  for (const dir of [bare, unreadable, empty]) await buildHooks({ outDir: join(dir, 'scripts') });
+  mkdirSync(join(unreadable, 'skills', 'oldman-rules', 'tell.md'), { recursive: true });
+  mkdirSync(join(empty, 'skills', 'oldman-rules'), { recursive: true });
+  writeFileSync(join(empty, 'skills', 'oldman-rules', 'tell.md'), '# Title\n\n## db\n\n- x\n');
 });
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -112,16 +118,24 @@ describe('session-start hook', () => {
     expect(lines[1]).toMatch(/^theoldman core rules/);
   });
 
-  it('fails open on invalid input or when the rules file is missing', () => {
-    const project = newProject();
-    expect(runStart(project, '{"hook_event_name": "SessionStart"}')).toEqual({
+  it('fails open on invalid input', () => {
+    expect(runStart(newProject(), '{"hook_event_name": "SessionStart"}')).toEqual({
       status: 1,
       stdout: '',
       stderr: 'theoldman: invalid hook input\n',
     });
-    const missing = runStart(project, undefined, bare);
-    expect(missing.status).toBe(1);
-    expect(missing.stdout).toBe('');
-    expect(missing.stderr).toMatch(/^theoldman: /);
+  });
+
+  // Exit 1 is a non-blocking error: the session goes on without the rules, nothing is added to
+  // Claude's context, and only one short line goes to stderr.
+  it.each([
+    ['missing', bare],
+    ['unreadable', unreadable],
+    ['without a core section', empty],
+  ])('fails open, adding no context, when tell.md is %s', (_name, pluginDir) => {
+    const run = runStart(newProject(), undefined, pluginDir);
+    expect(run.status).toBe(1);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toMatch(/^theoldman: [^\n]+\n$/);
   });
 });
