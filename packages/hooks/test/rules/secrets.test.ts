@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Rule } from '../../src/lib/rules.js';
 import { scanSecrets, secretMessage, secretsRule } from '../../src/rules/secrets.js';
-import { assertFast, runRuleOnFixtures } from '../harness.js';
+import { runRuleOnFixtures } from '../harness.js';
 import { FAKE_PLACEHOLDERS, FAKE_SECRETS, fillFakes, fillFakesInInput } from './fake-secrets.js';
 
 const rule: Rule = (input) => secretsRule()(fillFakesInInput(input));
@@ -67,17 +67,5 @@ describe('secretMessage', () => {
         expect(message).not.toContain(value.slice(-8));
       }
     }
-  });
-});
-
-describe('secrets rule', () => {
-  it('is fast on 2,000 lines', () => {
-    const lines = [
-      fillFakes("const s = new Stripe('{{fake:stripe-live}}');"),
-      'export const apiKey = process.env.API_KEY;',
-      fillFakes('SESSION_SECRET={{fake:high-entropy}}'),
-      'const value = compute(a, b) + 42; // ordinary code with = and : signs',
-    ];
-    assertFast(secretsRule(), { generate: (i) => lines[i % lines.length] ?? '' });
   });
 });

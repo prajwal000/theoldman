@@ -157,20 +157,4 @@ describe('extractComments', () => {
     expect(found('')).toEqual([]);
     expect(found('const a = "//"; const b = `/*`;')).toEqual([]);
   });
-
-  it('scans a 2,000-line file in well under 300 ms', () => {
-    const lines = [
-      "import { readFileSync } from 'node:fs';",
-      '// Prisma returns null for soft-deleted rows (see #214).',
-      "const url = 'https://example.com/api?q=' + encodeURIComponent(id); // not a comment start",
-      'const re = /\\/\\/[a-z]+/g;',
-      '/** Exported helper. */',
-      'export const label = `user ${name} // inside a template`;',
-    ];
-    const source = Array.from({ length: 2000 }, (_, i) => lines[i % lines.length]).join('\n');
-    const startedAt = performance.now();
-    const comments = extractComments(source);
-    expect(performance.now() - startedAt).toBeLessThan(300);
-    expect(comments.length).toBeGreaterThan(900);
-  });
 });

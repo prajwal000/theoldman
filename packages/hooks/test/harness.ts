@@ -132,7 +132,26 @@ export interface FastOptions {
   readonly file?: string;
 }
 
-/** Runs the rule once on a generated 2,000-line file, all lines added, and asserts under 300 ms. */
+export const SPEED_LIMIT_MS = 300;
+// Each speed check takes the median of several runs, so one run slowed by a busy machine does not
+// fail it; a genuinely slow rule is slow in every run.
+export const SPEED_RUNS = 5;
+
+/** Median wall time of `runs` calls of `fn`, in milliseconds. */
+export function medianMs(fn: () => unknown, runs = SPEED_RUNS): number {
+  const times = Array.from({ length: runs }, () => {
+    const startedAt = performance.now();
+    fn();
+    return performance.now() - startedAt;
+  }).sort((a, b) => a - b);
+  return times[Math.floor(runs / 2)] ?? 0;
+}
+
+/**
+ * Runs the rule on a generated 2,000-line file, all lines added, and asserts the median of
+ * {@link SPEED_RUNS} runs is under {@link SPEED_LIMIT_MS}. Call it only from
+ * performance.perf.test.ts, which runs on its own after the other tests.
+ */
 export function assertFast(rule: Rule, options: FastOptions = {}): number {
   const {
     generate = (index) => TYPICAL_LINES[index % TYPICAL_LINES.length] ?? '',
@@ -144,9 +163,10 @@ export function assertFast(rule: Rule, options: FastOptions = {}): number {
     content: `${lines.join('\n')}\n`,
     addedLines: lines.map((text, index) => ({ line: index + 1, text })),
   };
-  const startedAt = performance.now();
-  rule(input);
-  const elapsed = performance.now() - startedAt;
-  expect(elapsed, `rule took ${elapsed.toFixed(1)} ms on 2,000 lines`).toBeLessThan(300);
-  return elapsed;
+  const median = medianMs(() => rule(input));
+  expect(
+    median,
+    `rule took ${median.toFixed(1)} ms (median of ${String(SPEED_RUNS)} runs) on 2,000 lines`,
+  ).toBeLessThan(SPEED_LIMIT_MS);
+  return median;
 }

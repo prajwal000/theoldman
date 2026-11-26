@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { checkPath, guardWriteRule } from '../../src/rules/guard-write.js';
-import { assertFast, runRuleOnFixtures } from '../harness.js';
+import { runRuleOnFixtures } from '../harness.js';
 
 runRuleOnFixtures('OLDMAN-G05', guardWriteRule());
 runRuleOnFixtures('OLDMAN-G06', guardWriteRule());
@@ -27,13 +27,5 @@ describe('checkPath', () => {
     expect(rule({ file: 'x.txt', content: '\n', addedLines: [{ line: 1, text: '  ' }] })).toEqual(
       [],
     );
-  });
-
-  it('is fast on 2,000 paths', () => {
-    const paths = ['src/a.ts', 'apps/web/.env.local', 'C:\\keys\\server.key', '.env.example'];
-    assertFast(guardWriteRule(), {
-      generate: (i) => paths[i % paths.length] ?? '',
-      file: 'paths.txt',
-    });
   });
 });
