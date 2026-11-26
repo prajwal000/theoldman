@@ -7,10 +7,12 @@
 // comment of four words or fewer that opens with an edit verb (`// Fixed bug`) also counts.
 // OLDMAN-C04 a TODO, FIXME or HACK with no `(#123)`, `(name)` or link.
 // OLDMAN-C05 banner and divider comments: four or more `=`, `-`, `*`, `#` or `/` in a row.
-// As the SPEC says, a comment with a URL or an issue reference is neither narration nor a bare TODO.
+// Allow-listed comments (comment-allow.ts: license headers, TSDoc on exports, directives with a
+// reason, URLs and issue references) are never checked.
 
 import { extractComments, supportsComments } from '../lib/comments.js';
 import type { Finding, Rule, RuleInput } from '../lib/rules.js';
+import { isAllowedComment } from './comment-allow.js';
 
 export interface CommentLine {
   /** 1-based line in the file. */
@@ -18,17 +20,16 @@ export interface CommentLine {
   readonly text: string;
 }
 
-/** Each non-empty line of each comment that the edit added, with its line in the file. */
+/** Each non-empty line of each comment the edit added that is not allow-listed, with its line. */
 export function addedCommentLines(input: RuleInput): CommentLine[] {
   if (!supportsComments(input.file)) return [];
   const added = new Set(input.addedLines.map(({ line }) => line));
+  const lines = input.content.split(/\r?\n/);
   return extractComments(input.content, input.file)
+    .filter((comment) => !isAllowedComment(comment, lines))
     .flatMap((comment) => comment.lines.map((text, i) => ({ line: comment.line + i, text })))
     .filter(({ line, text }) => text !== '' && added.has(line));
 }
-
-/** A URL or an issue reference: such a comment points somewhere, so it is not narration. */
-export const REFERENCE = /https?:\/\/\S|#\d+\b/;
 
 /** `word` at the start of a comment, followed by `:`, the end, or one of `follows`. */
 const verb = (word: string, follows: string): RegExp =>
@@ -81,9 +82,7 @@ function commentRule(id: Finding['id'], message: string, matches: (text: string)
 export const c01 = commentRule(
   'OLDMAN-C01',
   'Move change notes to the commit message; a comment should say why the code is as it is.',
-  (text) =>
-    !REFERENCE.test(text) &&
-    (NARRATION.some((pattern) => pattern.test(text)) || isShortNarration(text)),
+  (text) => NARRATION.some((pattern) => pattern.test(text)) || isShortNarration(text),
 );
 
 export const c04 = commentRule(
@@ -91,7 +90,7 @@ export const c04 = commentRule(
   'Link the TODO to an issue or owner, as in TODO(#123) or TODO(name), or remove it.',
   (text) => {
     const marker = MARKER.exec(text);
-    return marker !== null && marker[1] === undefined && !REFERENCE.test(text);
+    return marker !== null && marker[1] === undefined;
   },
 );
 
