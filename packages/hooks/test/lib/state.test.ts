@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -35,7 +36,10 @@ describe('paused flag', () => {
     expect(isPaused(project)).toBe(false);
     setPaused(project, true);
     expect(isPaused(project)).toBe(true);
-    expect(filesUnder(project)).toEqual(['.theoldman/state/paused']);
+    expect(filesUnder(project).sort()).toEqual([
+      '.theoldman/.gitignore',
+      '.theoldman/state/paused',
+    ]);
     setPaused(project, false);
     expect(isPaused(project)).toBe(false);
   });
@@ -95,13 +99,38 @@ describe('feedback rounds', () => {
 });
 
 describe('state location', () => {
-  it('writes files only under .theoldman/state', () => {
+  it('writes only a .gitignore and files under .theoldman/state', () => {
     setPaused(project, true);
     addRound(project, 'session-1', 'comments');
     addRound(project, 'session-2', 'docs');
-    const files = filesUnder(project);
-    expect(files).toHaveLength(3);
-    for (const file of files) expect(file.startsWith('.theoldman/state/')).toBe(true);
+    expect(filesUnder(project).sort()).toEqual([
+      '.theoldman/.gitignore',
+      '.theoldman/state/paused',
+      '.theoldman/state/session-1/rounds.json',
+      '.theoldman/state/session-2/rounds.json',
+    ]);
+  });
+
+  it('ignores all of .theoldman in git without touching the project .gitignore', () => {
+    execFileSync('git', ['init', '-q', project]);
+    writeFileSync(join(project, '.gitignore'), 'dist/\n');
+    addRound(project, 'session-1', 'comments');
+    expect(readFileSync(join(project, '.theoldman', '.gitignore'), 'utf8')).toBe('*\n');
+    expect(readFileSync(join(project, '.gitignore'), 'utf8')).toBe('dist/\n');
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      cwd: project,
+      encoding: 'utf8',
+    });
+    expect(status).toBe('?? .gitignore\n');
+  });
+
+  it('leaves an existing .theoldman folder as it is', () => {
+    mkdirSync(join(project, '.theoldman'));
+    addRound(project, 'session-1', 'comments');
+    expect(existsSync(join(project, '.theoldman', '.gitignore'))).toBe(false);
+    writeFileSync(join(project, '.theoldman', '.gitignore'), 'state/\n');
+    setPaused(project, true);
+    expect(readFileSync(join(project, '.theoldman', '.gitignore'), 'utf8')).toBe('state/\n');
   });
 
   it.each([['.theoldman'], ['.theoldman/state'], ['.theoldman/state/session-1']])(

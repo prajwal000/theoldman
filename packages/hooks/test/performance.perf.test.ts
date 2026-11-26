@@ -9,6 +9,7 @@ import { extractComments } from '../src/lib/comments.js';
 import type { Rule, RuleInput } from '../src/lib/rules.js';
 import { c02, c03 } from '../src/rules/comment-code.js';
 import { c06 } from '../src/rules/comment-density.js';
+import { runChecks } from '../src/rules/check.js';
 import { c01, c04, c05 } from '../src/rules/comments.js';
 import { guardBashRule } from '../src/rules/guard-bash.js';
 import { guardWriteRule } from '../src/rules/guard-write.js';
@@ -146,6 +147,12 @@ describe('quality rules on 2,000 lines', () => {
     ['OLDMAN-Q04', q04],
   ])('%s', (_id, rule) => {
     assertFast(rule);
+  });
+});
+
+describe('every Check rule together on 2,000 lines', () => {
+  it('runChecks', () => {
+    assertFast((input) => runChecks(input));
   });
 });
 
