@@ -2,7 +2,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { readDotenv } from '../../src/lib/dotenv.js';
+import { dotenvNames, readDotenv } from '../../src/lib/dotenv.js';
+
+describe('dotenvNames', () => {
+  it('lists set, exported and commented-out names, and nothing else', () => {
+    const text =
+      'A=1\r\nexport B=\n# C=placeholder\n#D=\n# just a comment\nnot a line\n=x\n  E = 2\n';
+    expect([...dotenvNames(text)]).toEqual(['A', 'B', 'C', 'D', 'E']);
+  });
+});
 
 describe('readDotenv', () => {
   const dir = mkdtempSync(join(tmpdir(), 'theoldman-dotenv-'));

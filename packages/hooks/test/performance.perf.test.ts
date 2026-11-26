@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import { diffAddedLines } from '../src/lib/added-lines.js';
 import { extractComments } from '../src/lib/comments.js';
+import { parseDiff } from '../src/lib/diff.js';
+import { checkDocs } from '../src/rules/docs.js';
 import type { Rule, RuleInput } from '../src/lib/rules.js';
 import { c02, c03 } from '../src/rules/comment-code.js';
 import { c06 } from '../src/rules/comment-density.js';
@@ -147,6 +149,30 @@ describe('quality rules on 2,000 lines', () => {
     ['OLDMAN-Q04', q04],
   ])('%s', (_id, rule) => {
     assertFast(rule);
+  });
+});
+
+describe('docs rules on a 2,000-line diff', () => {
+  it('parses the diff and runs D01 to D04 in under 300 ms', () => {
+    const body = Array.from(
+      { length: 2000 },
+      (_, i) => `+export const v${String(i)} = process.env.VAR_${String(i % 50)};`,
+    );
+    const diff = `diff --git a/src/a.ts b/src/a.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/a.ts\n@@ -0,0 +1,2000 @@\n${body.join('\n')}\n`;
+    let count = 0;
+    const median = medianMs(() => {
+      const files = parseDiff(diff);
+      const context = {
+        files,
+        exampleVars: new Set<string>(),
+        newDependencies: [],
+        scriptChanges: [],
+        summary: '',
+      };
+      count = checkDocs(context).length;
+    });
+    expect(count).toBe(50);
+    expect(median).toBeLessThan(SPEED_LIMIT_MS);
   });
 });
 

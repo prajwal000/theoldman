@@ -1,0 +1,3 @@
+OLDMAN-D01 src/client.ts:1
+OLDMAN-D01 src/config.ts:2
+OLDMAN-D01 src/config.ts:3
