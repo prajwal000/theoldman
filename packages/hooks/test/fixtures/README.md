@@ -44,4 +44,6 @@ it('OLDMAN-C01 is fast', () => {
 
 `runRuleOnFixtures` adds one test per fixture. A test fails on a missing or unexpected finding, a finding that names another file, or one with an empty message. `assertFast` runs the rule once on a generated 2,000-line file and fails at 300 ms or more; pass `generate` for input that is not TypeScript, such as shell commands.
 
-Fixtures must not contain real secrets or personal data. Use obviously fake values, built so they do not trip GitHub secret scanning.
+Fixtures must not contain real secrets or personal data. The OLDMAN-S01 fixtures write secrets as `{{fake:name}}` placeholders, which `../rules/fake-secrets.ts` fills in at run time from pieces, so no secret-shaped string is ever committed and GitHub secret scanning has nothing to flag.
+
+Fixtures are excluded from TypeScript, ESLint and Prettier: they are deliberately bad code, and reformatting would move their line numbers.

@@ -1,0 +1,9 @@
+# expect: OLDMAN-S01@2, OLDMAN-S01@4, OLDMAN-S01@6, OLDMAN-S01@8
+{{fake:pem-rsa}}
+(key body)
+{{fake:pem-openssh}}
+(key body)
+{{fake:pem-pkcs8}}
+(key body)
+{{fake:pem-encrypted}}
+(key body)

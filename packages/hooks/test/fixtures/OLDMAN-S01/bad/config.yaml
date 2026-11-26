@@ -1,0 +1,5 @@
+# expect: OLDMAN-S01@3, OLDMAN-S01@4, OLDMAN-S01@5
+payments:
+  stripe_secret_key: {{fake:stripe-live}}
+  auth_token: "{{fake:hex-secret}}"
+  webhook: { signing_secret: '{{fake:high-entropy}}' }
