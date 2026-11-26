@@ -1,0 +1,8 @@
+.env.example
+apps\web\.env.example
+C:\repo\.env.EXAMPLE
+env.ts
+environment.md
+src/config/env.ts
+docs/env-setup.md
+.envrc

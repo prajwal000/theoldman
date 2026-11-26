@@ -1,0 +1,11 @@
+# expect: OLDMAN-G05@2, OLDMAN-G05@3, OLDMAN-G05@4, OLDMAN-G05@5, OLDMAN-G05@6, OLDMAN-G05@7, OLDMAN-G05@8, OLDMAN-G05@9, OLDMAN-G05@10, OLDMAN-G05@11
+.env
+.env.local
+.env.production
+apps/web/.env
+apps\web\.env
+C:\repo\.env.local
+/c/repo/.env
+.ENV
+/home/me/proj/.env.development.local
+./.env

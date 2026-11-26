@@ -23,6 +23,6 @@ export interface GuardContext extends GitContext {
 }
 
 export interface Violation {
-  readonly id: 'OLDMAN-G01' | 'OLDMAN-G02' | 'OLDMAN-G03' | 'OLDMAN-G04';
+  readonly id: `OLDMAN-G0${1 | 2 | 3 | 4 | 5 | 6}`;
   readonly message: string;
 }
