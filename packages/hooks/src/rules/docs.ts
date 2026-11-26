@@ -3,7 +3,8 @@
 //
 // OLDMAN-D01 (Fix): code reads `process.env.X` in an added line and no .env.example lists X.
 // OLDMAN-D02 (Warn): API route files changed and no OpenAPI or route doc did; the reviewer
-// confirms whether the docs need it.
+// confirms whether the docs need it. A README edit that mentions a Next.js route's URL counts as
+// documenting that route.
 // OLDMAN-D03 (Warn): a package.json gained a dependency, no ADR changed, and Claude's summary
 // does not name the dependency.
 // OLDMAN-D04 (Warn): package.json scripts or setup files changed and no README did.
@@ -70,12 +71,46 @@ export const d01: DocsRule = ({ files, exampleVars }) => {
     );
 };
 
+/** The URL of a Next.js route file, such as `/api/orders/[id]`; undefined for other routes. */
+function routeUrl(path: string): string | undefined {
+  const app = /(?:^|\/)app\/(.*?)\/?route\.[cm]?[jt]s$/.exec(path)?.[1];
+  // Route groups such as `(shop)` are folders only, not part of the URL.
+  if (app !== undefined)
+    return `/${app
+      .split('/')
+      .filter((s) => !/^\(.*\)$/.test(s))
+      .join('/')}`;
+  const pages = /(?:^|\/)pages\/(api\/.*?)(?:\/index)?\.[cm]?[jt]s$/.exec(path)?.[1];
+  return pages === undefined ? undefined : `/${pages}`;
+}
+
+/** Matches `url` in text, with dynamic segments written as `[id]`, `:id`, `{id}` or `<id>`. */
+function urlPattern(url: string): RegExp {
+  const segments = url
+    .split('/')
+    .map((segment) =>
+      /^\[.+\]$/.test(segment)
+        ? String.raw`(?:\[[^\]/]+\]|:\w+|\{\w+\}|<\w+>)`
+        : segment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+    );
+  return new RegExp(`${segments.join('/')}(?![\\w/[{:<-])`, 'i');
+}
+
 export const d02: DocsRule = ({ files }) => {
+  const readmeLines = files
+    .filter((file) => README.test(lower(file)))
+    .flatMap((file) => file.addedLines.map(({ text }) => text));
+  // A route the README now mentions by URL counts as documented.
+  const documented = (file: DiffFile): boolean => {
+    const url = routeUrl(file.path);
+    return url !== undefined && readmeLines.some((text) => urlPattern(url).test(text));
+  };
   const routes = files.filter((file) => {
     const path = lower(file);
     return CODE_FILE.test(path) && !TEST_FILE.test(path) && ROUTE_FILE.some((re) => re.test(path));
   });
-  const [first] = routes;
+  const undocumented = routes.filter((file) => !documented(file));
+  const [first] = undocumented;
   if (first === undefined || files.some((file) => API_DOC.test(lower(file)))) return [];
   return [
     {
@@ -83,7 +118,7 @@ export const d02: DocsRule = ({ files }) => {
       action: 'warn',
       file: first.path,
       line: firstLine(first),
-      message: `API route files changed (${listed(routes.map((file) => file.path))}) but no OpenAPI or route docs did. Check whether the API docs need an update.`,
+      message: `API route files changed (${listed(undocumented.map((file) => file.path))}) but no OpenAPI or route docs did, and the README does not mention them. Check whether the API docs need an update.`,
     },
   ];
 };

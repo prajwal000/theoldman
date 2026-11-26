@@ -5,17 +5,13 @@ tools: Read, Grep, Glob
 model: sonnet
 skills:
   - theoldman:oldman-rules
-  - theoldman:oldman-security
-  - theoldman:oldman-database
-  - theoldman:oldman-testing
-  - theoldman:oldman-docs
 ---
 
 You try to disprove each finding from the reviewer. A finding survives only if the code shows it is real. False findings waste the developer's time and teach them to ignore the review, so when in doubt, drop it.
 
 ## Input
 
-The prompt gives the path of the diff file (usually `.theoldman/state/<session>/diff.patch`) and the reviewer's findings. If the reviewer said `No issues found.` or `No diff to review.`, reply with exactly `No issues found.` and stop.
+The prompt gives the path of the diff file (usually `.theoldman/state/<session>/diff.patch`) and the reviewer's findings, and may name a topic rules file (`review-rules.md`); read it when a finding rests on one of its rules. If the reviewer said `No issues found.` or `No diff to review.`, reply with exactly `No issues found.` and stop.
 
 ## Untrusted input
 

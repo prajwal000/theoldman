@@ -27,7 +27,7 @@ describe('loadConfig', () => {
       config: {
         ...DEFAULT_CONFIG,
         level: 'strict',
-        review: { maxNits: 3, onStop: true, docsWriterModel: 'sonnet' },
+        review: { maxNits: 3, onStop: true, docsWriterModel: 'sonnet', lightMaxLines: 40 },
       },
     });
   });
@@ -38,7 +38,7 @@ describe('loadConfig', () => {
       stack: ['typescript', 'nextjs', 'prisma'],
       disable: ['OLDMAN-C02'],
       ignorePaths: ['dist/**'],
-      review: { maxNits: 0, onStop: false, docsWriterModel: 'opus' },
+      review: { maxNits: 0, onStop: false, docsWriterModel: 'opus', lightMaxLines: 0 },
       maxFeedbackRounds: 0,
     };
     writeConfig(JSON.stringify(full));
@@ -91,6 +91,14 @@ describe('parseConfig', () => {
     [{ review: { onStop: 'yes' } }, '"review.onStop" must be true or false'],
     [{ review: { docsWriterModel: '' } }, '"review.docsWriterModel" must be a non-empty string'],
     [{ review: { docsWriterModel: 5 } }, '"review.docsWriterModel" must be a non-empty string'],
+    [
+      { review: { lightMaxLines: -1 } },
+      '"review.lightMaxLines" must be a whole number of 0 or more',
+    ],
+    [
+      { review: { lightMaxLines: '40' } },
+      '"review.lightMaxLines" must be a whole number of 0 or more',
+    ],
   ])('rejects %j', (value, problem) => {
     expect(parseConfig(value)).toBe(problem);
   });

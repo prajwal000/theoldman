@@ -1,9 +1,19 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildHooks } from '../../build.mjs';
+import { recordCategories } from '../../src/lib/review-scope.js';
 import { recordBaseline } from '../../src/lib/session-changes.js';
 import {
   getRounds,
@@ -17,6 +27,9 @@ const outDir = join(root, 'scripts');
 
 beforeAll(async () => {
   await buildHooks({ outDir });
+  // The script reads topic rules from the skills folder next to its own, as in the plugin.
+  const skills = fileURLToPath(new URL('../../../../plugin/skills', import.meta.url));
+  cpSync(skills, join(root, 'skills'), { recursive: true });
 });
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -105,23 +118,52 @@ describe('stop-review hook', { timeout: 30_000 }, () => {
     expect(runStop(dir)).toEqual(silent);
   });
 
-  it('asks once for the review, with the diff of the session written to the state file', () => {
+  it('asks once for a light self-review of a small change, with the diff in the state file', () => {
     const dir = newRepo();
     edit(dir, { 'src/a.ts': 'export const a = 2;\n', 'src/new.ts': 'export const n = 1;\n' });
     const reason = blocked(runStop(dir));
     const diffPath = join(dir, '.theoldman', 'state', 's1', 'diff.patch');
-    expect(reason).toContain(
-      `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.`,
-    );
-    expect(reason).toContain('theoldman:oldman-verifier');
+    expect(reason).toContain('1. This change is small, so check it yourself, without subagents:');
+    expect(reason).toContain(`The diff is at ${diffPath} if you need it.`);
+    expect(reason).not.toContain('oldman-reviewer');
     // Nothing was capped and there is no docs finding: no empty sections after the steps.
     expect(reason).not.toContain('Left after the feedback limit');
-    expect(reason.endsWith('Mention confirmed Nits in your summary.')).toBe(true);
+    expect(reason.endsWith('Do not repeat your earlier summary.')).toBe(true);
     const diff = readFileSync(diffPath, 'utf8');
     expect(diff).toContain('+export const a = 2;');
     expect(diff).toContain('+++ b/src/new.ts');
     expect(getRounds(dir, 's1', 'review')).toBe(1);
     expect(runStop(dir)).toEqual(silent);
+  });
+
+  it('asks for a full review above review.lightMaxLines, with only the topic rules that fit', () => {
+    const dir = newRepo({ '.theoldman.json': JSON.stringify({ review: { lightMaxLines: 1 } }) });
+    recordCategories(dir, 's1', ['tests']);
+    edit(dir, {
+      'prisma/schema.prisma': 'model Order {\n  id String @id\n  status String\n}\n',
+      'src/orders.ts': 'export const statuses = ["pending", "paid"];\n',
+    });
+    const reason = blocked(runStop(dir));
+    const state = join(dir, '.theoldman', 'state', 's1');
+    expect(reason).toContain(
+      `Review the diff at ${join(state, 'diff.patch')}. Read the topic rules in ${join(state, 'review-rules.md')} first.`,
+    );
+    expect(reason).toContain(
+      `If the reviewer's reply is exactly "No issues found.", skip this step.`,
+    );
+    const rules = readFileSync(join(state, 'review-rules.md'), 'utf8');
+    expect(rules).toMatch(/^# Database\n/);
+    expect(rules).toContain('\n# Testing\n');
+    expect(rules).not.toContain('# Security');
+    expect(rules).not.toContain('name: oldman-database');
+  });
+
+  it('skips tests-only changes, but looks at test changes that remove lines or skip tests', () => {
+    const dir = newRepo({ 'src/a.test.ts': 'it("adds", () => {\n  expect(1 + 1).toBe(2);\n});\n' });
+    edit(dir, { 'src/b.test.ts': 'it("works", () => {\n  expect(true).toBe(true);\n});\n' });
+    expect(runStop(dir)).toEqual(silent);
+    edit(dir, { 'src/a.test.ts': 'it.skip("adds", () => {\n  expect(1 + 1).toBe(2);\n});\n' });
+    expect(blocked(runStop(dir))).toContain('This change is small, so check it yourself');
   });
 
   it('leaves out uncommitted work from before the session, but catches changes made by Bash', () => {
@@ -170,7 +212,7 @@ describe('stop-review hook', { timeout: 30_000 }, () => {
     recordCappedFindings(dir, 's1', 'src/a.ts', ['OLDMAN-C01 src/a.ts:1 Move change notes.']);
     const reason = blocked(runStop(dir));
     expect(reason).toMatch(
-      /4\. Fix these docs findings:\nOLDMAN-D01 src\/a\.ts:1 process\.env\.API_KEY/,
+      /2\. Fix these docs findings:\nOLDMAN-D01 src\/a\.ts:1 process\.env\.API_KEY/,
     );
     expect(reason).toContain(
       'Left after the feedback limit; mention them in your summary:\nOLDMAN-C01 src/a.ts:1 Move change notes.',

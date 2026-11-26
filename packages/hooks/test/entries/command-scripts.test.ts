@@ -1,7 +1,16 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildHooks } from '../../build.mjs';
 import { isPaused } from '../../src/lib/state.js';
@@ -11,6 +20,9 @@ const outDir = join(root, 'scripts');
 
 beforeAll(async () => {
   await buildHooks({ outDir });
+  // The review script reads topic rules from the skills folder next to its own, as in the plugin.
+  const skills = fileURLToPath(new URL('../../../../plugin/skills', import.meta.url));
+  cpSync(skills, join(root, 'skills'), { recursive: true });
 });
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -101,6 +113,17 @@ describe('oldman-review-diff.mjs', { timeout: 30_000 }, () => {
     for (const text of ['+export const a = 2;', '+export const b = 2;', '+++ b/src/new.ts']) {
       expect(diff).toContain(text);
     }
+  });
+
+  it('writes the topic rules that fit the changed files, and names them', () => {
+    const dir = repo();
+    mkdirSync(join(dir, 'prisma'));
+    writeFileSync(join(dir, 'prisma', 'schema.prisma'), 'model Order {\n  id String @id\n}\n');
+    const lines = run('oldman-review-diff.mjs', ['s1', dir]).stdout.trim().split('\n');
+    const rules = join(dir, '.theoldman', 'state', 's1', 'review-rules.md');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe(`Topic rules for this change: ${rules}`);
+    expect(readFileSync(rules, 'utf8')).toMatch(/^# Database\n/);
   });
 
   it("prefers the remote's default branch", () => {

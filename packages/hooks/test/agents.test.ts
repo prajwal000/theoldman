@@ -6,13 +6,9 @@ const AGENTS = ['oldman-docs-writer', 'oldman-reviewer', 'oldman-verifier'];
 // Claude Code ignores unknown frontmatter fields, and skips unknown names in `skills`, without a
 // warning, so both are checked here.
 const FIELDS = ['name', 'description', 'tools', 'model', 'skills'];
-const REVIEW_SKILLS = [
-  'theoldman:oldman-rules',
-  'theoldman:oldman-security',
-  'theoldman:oldman-database',
-  'theoldman:oldman-testing',
-  'theoldman:oldman-docs',
-];
+// Only the core rules load with the agent; the topic rules that fit a change come in a rules file
+// the Stop hook or the review command writes from the same skills.
+const REVIEW_SKILLS = ['theoldman:oldman-rules'];
 
 interface Agent {
   readonly fields: Record<string, string>;
@@ -70,8 +66,9 @@ describe.each(['oldman-reviewer', 'oldman-verifier'])('%s', (name) => {
     expect(fields.tools).toBe('Read, Grep, Glob');
   });
 
-  it('loads the core rules and the topic skills it reviews against', () => {
+  it('loads the core rules, and the topic rules file named in the prompt', () => {
     expect(skills).toEqual(REVIEW_SKILLS);
+    expect(body).toContain('`review-rules.md`');
   });
 
   it('reads the diff from the state file named in the prompt', () => {

@@ -112,11 +112,66 @@ function pickLines(sections, max) {
 import { existsSync, lstatSync, mkdirSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 var PAUSED_FILE = "paused";
+var SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 function stateDir(projectDir) {
   return join(projectDir, ".theoldman", "state");
 }
+function sessionSegment(sessionId) {
+  if (!SESSION_ID.test(sessionId)) throw new Error("invalid session id");
+  return sessionId;
+}
+function ensureStateDir(projectDir, ...segments) {
+  let dir = projectDir;
+  for (const segment of [".theoldman", "state", ...segments]) {
+    dir = join(dir, segment);
+    if (!existsSync(dir)) {
+      mkdirSync(dir);
+      if (segment === ".theoldman") writeFileSync(join(dir, ".gitignore"), "*\n");
+    }
+    if (lstatSync(dir).isSymbolicLink()) {
+      throw new Error(`${segment} is a symbolic link; refusing to write state through it`);
+    }
+  }
+  return dir;
+}
 function isPaused(projectDir) {
   return existsSync(join(stateDir(projectDir), PAUSED_FILE));
+}
+function readSessionJson(projectDir, sessionId, name) {
+  const file = join(stateDir(projectDir), sessionSegment(sessionId), name);
+  return existsSync(file) ? parseJson(readFileSync2(file, "utf8")) : void 0;
+}
+function writeSessionFile(projectDir, sessionId, name, text) {
+  const file = join(ensureStateDir(projectDir, sessionSegment(sessionId)), name);
+  writeFileSync(file, text);
+  return file;
+}
+function writeSessionJson(projectDir, sessionId, name, value) {
+  writeSessionFile(projectDir, sessionId, name, JSON.stringify(value));
+}
+
+// src/lib/review-scope.ts
+var CATEGORIES_FILE = "categories.json";
+var CATEGORY_NAMES = [
+  "auth",
+  "db",
+  "api",
+  "infra",
+  "tests",
+  "git",
+  "docs",
+  "ui"
+];
+var isCategory = (value) => typeof value === "string" && CATEGORY_NAMES.includes(value);
+function sessionCategories(projectDir, sessionId) {
+  const value = readSessionJson(projectDir, sessionId, CATEGORIES_FILE);
+  return Array.isArray(value) ? value.filter(isCategory) : [];
+}
+function recordCategories(projectDir, sessionId, categories) {
+  const known = sessionCategories(projectDir, sessionId);
+  const added = categories.filter((category) => !known.includes(category));
+  if (added.length > 0)
+    writeSessionJson(projectDir, sessionId, CATEGORIES_FILE, [...known, ...added]);
 }
 
 // src/lib/tell.ts
@@ -144,8 +199,14 @@ var MAX_LINES = 4;
 runHook(() => {
   const input = readHookInput(isPromptHookInput);
   if (input === void 0) return failOpen("invalid hook input");
-  if (isPaused(process.env.CLAUDE_PROJECT_DIR ?? input.cwd)) return pass();
-  const categories = classify(input.prompt).slice(0, MAX_CATEGORIES);
+  const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  if (isPaused(root)) return pass();
+  const found = classify(input.prompt);
+  try {
+    recordCategories(root, input.session_id, found);
+  } catch {
+  }
+  const categories = found.slice(0, MAX_CATEGORIES);
   if (categories.length === 0) return pass();
   const sections = readTellSections(fileURLToPath(new URL("..", import.meta.url)));
   const lines = pickLines(

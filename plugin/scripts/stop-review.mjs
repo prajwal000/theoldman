@@ -1,5 +1,6 @@
 // src/entries/stop-review.ts
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 
 // src/lib/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
@@ -35,7 +36,7 @@ var DEFAULT_CONFIG = {
   stack: [],
   disable: [],
   ignorePaths: ["**/generated/**", "**/*.lock", "**/vendor/**"],
-  review: { maxNits: 5, onStop: true, docsWriterModel: "sonnet" },
+  review: { maxNits: 5, onStop: true, docsWriterModel: "sonnet", lightMaxLines: 40 },
   maxFeedbackRounds: 2
 };
 var LEVELS = ["quick", "standard", "strict"];
@@ -58,14 +59,18 @@ function parseReview(value) {
   const {
     maxNits = DEFAULT_CONFIG.review.maxNits,
     onStop = DEFAULT_CONFIG.review.onStop,
-    docsWriterModel = DEFAULT_CONFIG.review.docsWriterModel
+    docsWriterModel = DEFAULT_CONFIG.review.docsWriterModel,
+    lightMaxLines = DEFAULT_CONFIG.review.lightMaxLines
   } = value;
   if (!isCount(maxNits)) return '"review.maxNits" must be a whole number of 0 or more';
   if (typeof onStop !== "boolean") return '"review.onStop" must be true or false';
   if (typeof docsWriterModel !== "string" || docsWriterModel === "") {
     return '"review.docsWriterModel" must be a non-empty string';
   }
-  return { maxNits, onStop, docsWriterModel };
+  if (!isCount(lightMaxLines)) {
+    return '"review.lightMaxLines" must be a whole number of 0 or more';
+  }
+  return { maxNits, onStop, docsWriterModel, lightMaxLines };
 }
 function parseConfig(value) {
   if (!isRecord(value)) return "must be a JSON object";
@@ -228,7 +233,7 @@ function parseDiff(diff) {
     if (line.startsWith("diff --git ")) {
       const rest = line.slice("diff --git ".length);
       const path = unquote(rest.slice(0, (rest.length - 1) / 2)).slice(2);
-      current = { path, status: "modified", addedLines: [] };
+      current = { path, status: "modified", addedLines: [], removedLines: 0 };
       files.push(current);
       inHunk = false;
     } else if (current === void 0) {
@@ -239,6 +244,7 @@ function parseDiff(diff) {
     } else if (inHunk) {
       if (line.startsWith("+")) current.addedLines.push({ line: next, text: line.slice(1) });
       if (line.startsWith("+") || line.startsWith(" ")) next += 1;
+      if (line.startsWith("-")) current.removedLines += 1;
     } else if (line.startsWith("new file mode")) {
       current.status = "added";
     } else if (line.startsWith("deleted file mode")) {
@@ -325,9 +331,53 @@ function isIgnored(filePath2, projectDir, patterns) {
   return patterns.some((pattern) => globToRegExp(pattern).test(relative));
 }
 
-// src/lib/session-changes.ts
-import { statSync } from "node:fs";
+// src/lib/review-scope.ts
+import { readFileSync as readFileSync5 } from "node:fs";
 import { join as join4 } from "node:path";
+
+// src/lib/router.ts
+var KEYWORDS = [
+  [
+    "auth",
+    /\b(auth\w*|log ?ins?|log ?outs?|logged (in|out)|sign ?(ins?|ups?|outs?)|passwords?|sessions?|jwts?|oauth|sso|tokens?|permissions?|roles?|rbac|admins?|cookies?|csrf|2fa|mfa)\b/g
+  ],
+  [
+    "db",
+    /\b(databases?|db|sql|postgres\w*|mysql|sqlite|mongo\w*|prisma|drizzle|orm|migrations?|migrate|schemas?|tables?|columns?|index(es)?|indices|quer(y|ies)|seeds?|transactions?|n\+1|backfill)\b/g
+  ],
+  [
+    "api",
+    /\b(apis?|endpoints?|routes?|rest|graphql|grpc|controllers?|handlers?|webhooks?|express|fastify|middleware|requests?|responses?|post|get|put|patch|status codes?|rate limit\w*)\b/g
+  ],
+  [
+    "infra",
+    /\b(docker\w*|compose|containers?|deploy\w*|ci|pipelines?|kubernetes|k8s|helm|terraform|nginx|aws|s3|gcp|azure|vercel|github actions|workflows?|env vars?|environment variables?|servers?|dns|cdn|monitoring)\b/g
+  ],
+  [
+    "tests",
+    /\b(tests?|testing|tested|specs?|vitest|jest|mocha|playwright|cypress|coverage|mocks?|mocking|stubs?|fixtures?|e2e|tdd|assertions?|flaky)\b/g
+  ],
+  [
+    "git",
+    /\b(git|commits?|branch(es)?|merge[sd]?|rebase[sd]?|prs?|pull requests?|push|cherry-pick|stash|squash|conflicts?)\b/g
+  ],
+  [
+    "docs",
+    /\b(readme|docs?|documentation|document|changelog|adrs?|jsdoc|tsdoc|comments?|env\.example)\b/g
+  ],
+  [
+    "ui",
+    /\b(ui|ux|components?|buttons?|pages?|css|styles?|styling|tailwind|layouts?|react|jsx|tsx|modals?|forms?|frontend|a11y|accessibility|responsive|mobile|dark mode|navbar|sidebar|animations?)\b/g
+  ]
+];
+var MAX_PROMPT_CHARS = 1e4;
+function classify(prompt) {
+  const text = prompt.slice(0, MAX_PROMPT_CHARS).toLowerCase();
+  return KEYWORDS.map(([category, pattern]) => ({
+    category,
+    count: text.match(pattern)?.length ?? 0
+  })).filter(({ count }) => count > 0).sort((a, b) => b.count - a.count).map(({ category }) => category);
+}
 
 // src/lib/state.ts
 import { existsSync, lstatSync, mkdirSync, readFileSync as readFileSync4, rmSync, writeFileSync } from "node:fs";
@@ -409,7 +459,74 @@ function cappedFindings(projectDir, sessionId) {
   );
 }
 
+// src/lib/review-scope.ts
+var DOC_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc)$|(?:^|\/)(?:license|changelog)[^/]*$/i;
+var TEST_FILE = /(?:^|\/)(?:__tests__|tests?)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+var SKIPS_TESTS = /\.(?:skip|only|todo)\s*\(|\b(?:xit|xdescribe|xtest)\s*\(/;
+var CATEGORIES_FILE = "categories.json";
+var CATEGORY_NAMES = [
+  "auth",
+  "db",
+  "api",
+  "infra",
+  "tests",
+  "git",
+  "docs",
+  "ui"
+];
+var SKILL_FOR = {
+  auth: "oldman-security",
+  api: "oldman-security",
+  infra: "oldman-security",
+  db: "oldman-database",
+  tests: "oldman-testing",
+  docs: "oldman-docs",
+  git: void 0,
+  ui: void 0
+};
+var isCategory = (value) => typeof value === "string" && CATEGORY_NAMES.includes(value);
+function reviewKind(files, lightMaxLines) {
+  const code = files.filter((file) => !DOC_FILE.test(file.path) && !TEST_FILE.test(file.path));
+  if (code.length === 0) {
+    const weakens = files.some(
+      (file) => TEST_FILE.test(file.path) && (file.removedLines > 0 || file.addedLines.some(({ text }) => SKIPS_TESTS.test(text)))
+    );
+    return weakens ? "light" : "none";
+  }
+  const size = code.reduce((total, file) => total + file.addedLines.length + file.removedLines, 0);
+  return size <= lightMaxLines ? "light" : "full";
+}
+function sessionCategories(projectDir, sessionId) {
+  const value = readSessionJson(projectDir, sessionId, CATEGORIES_FILE);
+  return Array.isArray(value) ? value.filter(isCategory) : [];
+}
+function reviewSkills(paths, categories) {
+  const fromPaths = classify(paths.join(" ").replace(/[/\\._-]+/g, " "));
+  const skills = [...fromPaths, ...categories].map((category) => SKILL_FOR[category]);
+  return [...new Set(skills.filter((skill) => skill !== void 0))].sort();
+}
+function writeReviewRules(pluginRoot, projectDir, sessionId, skills) {
+  const bodies = skills.flatMap((skill) => {
+    try {
+      const text = readFileSync5(join4(pluginRoot, "skills", skill, "SKILL.md"), "utf8");
+      return [text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim()];
+    } catch {
+      return [];
+    }
+  });
+  if (bodies.length === 0) return void 0;
+  return writeSessionFile(
+    projectDir,
+    sessionId,
+    "review-rules.md",
+    `${bodies.join("\n\n---\n\n")}
+`
+  );
+}
+
 // src/lib/session-changes.ts
+import { statSync } from "node:fs";
+import { join as join5 } from "node:path";
 var BASELINE_FILE = "baseline.json";
 var MAX_DIRTY_FILES = 5e3;
 function fingerprint(file) {
@@ -436,7 +553,7 @@ function dirtyFiles(projectDir, limit = MAX_DIRTY_FILES) {
   }
   const paths = [...new Set(listed2.split("\0").filter((path) => path !== ""))];
   if (paths.length > limit) return void 0;
-  return Object.fromEntries(paths.map((path) => [path, fingerprint(join4(projectDir, path))]));
+  return Object.fromEntries(paths.map((path) => [path, fingerprint(join5(projectDir, path))]));
 }
 var insideProject = (path) => !/^(?:[a-z]:|\/|\.\.(?:\/|$))/i.test(path);
 function sessionChanges(projectDir, sessionId) {
@@ -460,19 +577,36 @@ function section(title, lines) {
   ];
 }
 var asLines = (findings) => findings.length === 0 ? [] : formatFindings(findings).split("\n");
-function blockReason({ diffPath, fixes, capped, notes }) {
+var LIGHT_CHECKS = "wrong conditions and off-by-one errors, unhandled null or errors, missing await, missing authentication or ownership checks, unvalidated input, queries without a limit, and new behaviour without a test";
+function reviewSteps(kind, diffPath, rulesPath) {
+  if (kind === "light") {
+    return [
+      `1. This change is small, so check it yourself, without subagents: go over the lines you changed for ${LIGHT_CHECKS}. The diff is at ${diffPath} if you need it. Fix what you find, then run the tests again.`
+    ];
+  }
+  const rules = rulesPath === void 0 ? "" : ` Read the topic rules in ${rulesPath} first.`;
+  const files = rulesPath === void 0 ? "the same diff path" : "the same diff and rules paths";
+  return [
+    `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.${rules}`,
+    `2. If the reviewer's reply is exactly "No issues found.", skip this step. Otherwise run the theoldman:oldman-verifier subagent with ${files} and the reviewer's full reply.`,
+    "3. Fix every confirmed Critical and Important finding, then run the tests again. Mention confirmed Nits in your summary."
+  ];
+}
+function blockReason(report) {
+  const { kind = "full", diffPath, rulesPath, fixes, capped, notes } = report;
   const steps = [];
   if (diffPath !== void 0) {
-    const apiDocs = notes.some((note) => note.id === "OLDMAN-D02") ? " Also check whether the API docs need an update for the changed routes." : "";
-    steps.push(
-      `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.${apiDocs}`,
-      "2. Run the theoldman:oldman-verifier subagent with the same diff path and the reviewer's full reply.",
-      "3. Fix every confirmed Critical and Important finding, then run the tests again. Mention confirmed Nits in your summary."
-    );
+    steps.push(...reviewSteps(kind, diffPath, rulesPath));
+    if (notes.some((note) => note.id === "OLDMAN-D02")) {
+      steps[0] = `${steps[0] ?? ""} Also check whether the API docs need an update for the changed routes.`;
+    }
   }
   if (fixes.length > 0) {
     steps.push(`${String(steps.length + 1)}. Fix these docs findings:`, ...asLines(fixes));
   }
+  steps.push(
+    "Then reply in one or two lines with what this step found or changed. Do not repeat your earlier summary."
+  );
   return [
     "theoldman: code changed in this session. Before you finish:",
     ...steps,
@@ -490,8 +624,8 @@ function userNotice(report, reviewSkipped) {
 }
 
 // src/rules/docs-context.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { join as join5 } from "node:path";
+import { readFileSync as readFileSync6 } from "node:fs";
+import { join as join6 } from "node:path";
 
 // src/lib/dotenv.ts
 var LISTED = /^\s*(?:#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/;
@@ -513,7 +647,7 @@ var DEPENDENCY_FIELDS = [
 ];
 function readText(path) {
   try {
-    return readFileSync5(path, "utf8");
+    return readFileSync6(path, "utf8");
   } catch {
     return void 0;
   }
@@ -534,9 +668,9 @@ function lineOf(file, matches) {
   return (file.addedLines.find(({ text }) => matches(text)) ?? file.addedLines[0])?.line ?? 1;
 }
 function packageChanges(projectDir, file) {
-  const now = manifest(readText(join5(projectDir, file.path)));
+  const now = manifest(readText(join6(projectDir, file.path)));
   if (now === void 0) return { dependencies: [], scripts: [] };
-  const before = (file.status === "added" ? void 0 : manifest(readHeadVersion(join5(projectDir, file.path)))) ?? {};
+  const before = (file.status === "added" ? void 0 : manifest(readHeadVersion(join6(projectDir, file.path)))) ?? {};
   const old = dependencyNames(before);
   const dependencies = [...dependencyNames(now)].filter((name) => !old.has(name)).map((name) => ({
     file: file.path,
@@ -564,7 +698,7 @@ function exampleVars(projectDir) {
   }
   const names = /* @__PURE__ */ new Set();
   for (const path of listed2.split("\0").filter((entry) => entry !== "")) {
-    for (const name of dotenvNames(readText(join5(projectDir, path)) ?? "")) names.add(name);
+    for (const name of dotenvNames(readText(join6(projectDir, path)) ?? "")) names.add(name);
   }
   return names;
 }
@@ -585,7 +719,7 @@ var CODE_FILE = /\.[cm]?[jt]sx?$/;
 var COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/;
 var ENV_READ = /\bprocess\.env(?:\.([A-Za-z_]\w*)\b|\[\s*(['"`])([A-Za-z_]\w*)\2\s*\])(?!\s*=(?!=))/g;
 var RUNTIME_VARS = /* @__PURE__ */ new Set(["NODE_ENV", "CI"]);
-var TEST_FILE = /(^|\/)(__tests__|tests?)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
+var TEST_FILE2 = /(^|\/)(__tests__|tests?)\/|\.(test|spec)\.[cm]?[jt]sx?$/;
 var ROUTE_FILE = [
   /(^|\/)app\/(.+\/)?route\.[cm]?[jt]s$/,
   /(^|\/)pages\/api\//,
@@ -623,12 +757,31 @@ var d01 = ({ files, exampleVars: exampleVars2 }) => {
     )
   );
 };
+function routeUrl(path) {
+  const app = /(?:^|\/)app\/(.*?)\/?route\.[cm]?[jt]s$/.exec(path)?.[1];
+  if (app !== void 0)
+    return `/${app.split("/").filter((s) => !/^\(.*\)$/.test(s)).join("/")}`;
+  const pages = /(?:^|\/)pages\/(api\/.*?)(?:\/index)?\.[cm]?[jt]s$/.exec(path)?.[1];
+  return pages === void 0 ? void 0 : `/${pages}`;
+}
+function urlPattern(url) {
+  const segments = url.split("/").map(
+    (segment) => /^\[.+\]$/.test(segment) ? String.raw`(?:\[[^\]/]+\]|:\w+|\{\w+\}|<\w+>)` : segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  );
+  return new RegExp(`${segments.join("/")}(?![\\w/[{:<-])`, "i");
+}
 var d02 = ({ files }) => {
+  const readmeLines = files.filter((file) => README.test(lower(file))).flatMap((file) => file.addedLines.map(({ text }) => text));
+  const documented = (file) => {
+    const url = routeUrl(file.path);
+    return url !== void 0 && readmeLines.some((text) => urlPattern(url).test(text));
+  };
   const routes = files.filter((file) => {
     const path = lower(file);
-    return CODE_FILE.test(path) && !TEST_FILE.test(path) && ROUTE_FILE.some((re) => re.test(path));
+    return CODE_FILE.test(path) && !TEST_FILE2.test(path) && ROUTE_FILE.some((re) => re.test(path));
   });
-  const [first] = routes;
+  const undocumented = routes.filter((file) => !documented(file));
+  const [first] = undocumented;
   if (first === void 0 || files.some((file) => API_DOC.test(lower(file)))) return [];
   return [
     {
@@ -636,7 +789,7 @@ var d02 = ({ files }) => {
       action: "warn",
       file: first.path,
       line: firstLine(first),
-      message: `API route files changed (${listed(routes.map((file) => file.path))}) but no OpenAPI or route docs did. Check whether the API docs need an update.`
+      message: `API route files changed (${listed(undocumented.map((file) => file.path))}) but no OpenAPI or route docs did, and the README does not mention them. Check whether the API docs need an update.`
     }
   ];
 };
@@ -675,7 +828,6 @@ function checkDocs(context) {
 }
 
 // src/entries/stop-review.ts
-var DOC_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc)$|(?:^|\/)(?:license|changelog)[^/]*$/i;
 var REVIEW_STATE = "review.json";
 var hash = (text) => createHash("sha256").update(text).digest("hex");
 function sessionDiff(projectDir, paths) {
@@ -697,7 +849,8 @@ runHook(() => {
   );
   if (paths.length === 0) return pass();
   const diff = sessionDiff(root, paths);
-  if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
+  const kind = reviewKind(parseDiff(diff), config.review.lightMaxLines);
+  if (kind === "none") return pass();
   const stored = readSessionJson(root, session, REVIEW_STATE);
   const state = (key) => isRecord(stored) ? stored[key] : void 0;
   const save = (reviewed, notified = state("notified")) => {
@@ -722,12 +875,20 @@ runHook(() => {
   const docsFix = fixes.length > 0 && getRounds(root, session, "docs") < max;
   if (review || docsFix) {
     const diffPath = review ? writeSessionFile(root, session, "diff.patch", diff) : void 0;
+    const skills = review && kind === "full" ? reviewSkills(paths, sessionCategories(root, session)) : [];
+    const rulesPath = writeReviewRules(
+      fileURLToPath(new URL("..", import.meta.url)),
+      root,
+      session,
+      skills
+    );
     if (review) addRound(root, session, "review");
     if (docsFix) addRound(root, session, "docs");
     save(diffHash);
     const leftFixes = docsFix || fixes.length === 0 ? [] : formatFindings(fixes).split("\n");
     const left = [...capped, ...leftFixes];
-    return fix("Stop", blockReason({ diffPath, fixes: docsFix ? fixes : [], capped: left, notes }));
+    const report = { kind, diffPath, rulesPath, fixes: docsFix ? fixes : [], capped: left, notes };
+    return fix("Stop", blockReason(report));
   }
   const skipped = wantsReview ? `this session already had ${String(max)} reviews (maxFeedbackRounds)` : void 0;
   const notice = userNotice({ fixes, capped, notes }, skipped);

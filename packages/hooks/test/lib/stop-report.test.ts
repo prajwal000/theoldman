@@ -11,20 +11,23 @@ const finding = (id: Finding['id'], action: Finding['action'], line = 1): Findin
 });
 
 describe('blockReason', () => {
-  it('asks for the review with the diff path, then lists fixes, leftovers and notes', () => {
+  it('asks for a full review with the diff and rules paths, then lists fixes, leftovers and notes', () => {
     const reason = blockReason({
+      kind: 'full',
       diffPath: '/p/.theoldman/state/s1/diff.patch',
+      rulesPath: '/p/.theoldman/state/s1/review-rules.md',
       fixes: [finding('OLDMAN-D01', 'fix', 3)],
       capped: ['OLDMAN-C01 src/b.ts:2 Move change notes.'],
       notes: [finding('OLDMAN-D04', 'warn')],
     });
     expect(reason.split('\n')).toEqual([
       'theoldman: code changed in this session. Before you finish:',
-      '1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at /p/.theoldman/state/s1/diff.patch.',
-      "2. Run the theoldman:oldman-verifier subagent with the same diff path and the reviewer's full reply.",
+      '1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at /p/.theoldman/state/s1/diff.patch. Read the topic rules in /p/.theoldman/state/s1/review-rules.md first.',
+      '2. If the reviewer\'s reply is exactly "No issues found.", skip this step. Otherwise run the theoldman:oldman-verifier subagent with the same diff and rules paths and the reviewer\'s full reply.',
       '3. Fix every confirmed Critical and Important finding, then run the tests again. Mention confirmed Nits in your summary.',
       '4. Fix these docs findings:',
       'OLDMAN-D01 src/a.ts:3 OLDMAN-D01 message.',
+      'Then reply in one or two lines with what this step found or changed. Do not repeat your earlier summary.',
       '',
       'Left after the feedback limit; mention them in your summary:',
       'OLDMAN-C01 src/b.ts:2 Move change notes.',
@@ -32,6 +35,29 @@ describe('blockReason', () => {
       'Notes, no fix required:',
       'OLDMAN-D04 src/a.ts:1 OLDMAN-D04 message.',
     ]);
+  });
+
+  it('asks for a full review without a rules file when no topic fits', () => {
+    const reason = blockReason({ diffPath: 'd.patch', fixes: [], capped: [], notes: [] });
+    expect(reason).toContain(
+      '1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at d.patch.\n',
+    );
+    expect(reason).toContain('verifier subagent with the same diff path and');
+  });
+
+  it('asks for a light self-review of a small change, without subagents', () => {
+    const notes = [finding('OLDMAN-D02', 'warn')];
+    const reason = blockReason({
+      kind: 'light',
+      diffPath: 'd.patch',
+      fixes: [],
+      capped: [],
+      notes,
+    });
+    expect(reason.split('\n')[1]).toBe(
+      '1. This change is small, so check it yourself, without subagents: go over the lines you changed for wrong conditions and off-by-one errors, unhandled null or errors, missing await, missing authentication or ownership checks, unvalidated input, queries without a limit, and new behaviour without a test. The diff is at d.patch if you need it. Fix what you find, then run the tests again. Also check whether the API docs need an update for the changed routes.',
+    );
+    expect(reason).not.toContain('oldman-reviewer');
   });
 
   it('asks the reviewer about API docs when D02 fired, and works without a review', () => {
