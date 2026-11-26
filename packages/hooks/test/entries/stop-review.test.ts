@@ -114,6 +114,9 @@ describe('stop-review hook', { timeout: 30_000 }, () => {
       `1. Run the theoldman:oldman-reviewer subagent with the prompt: Review the diff at ${diffPath}.`,
     );
     expect(reason).toContain('theoldman:oldman-verifier');
+    // Nothing was capped and there is no docs finding: no empty sections after the steps.
+    expect(reason).not.toContain('Left after the feedback limit');
+    expect(reason.endsWith('Mention confirmed Nits in your summary.')).toBe(true);
     const diff = readFileSync(diffPath, 'utf8');
     expect(diff).toContain('+export const a = 2;');
     expect(diff).toContain('+++ b/src/new.ts');

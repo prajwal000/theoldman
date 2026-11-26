@@ -725,7 +725,8 @@ runHook(() => {
     if (review) addRound(root, session, "review");
     if (docsFix) addRound(root, session, "docs");
     save(diffHash);
-    const left = docsFix ? capped : [...capped, ...formatFindings(fixes).split("\n")];
+    const leftFixes = docsFix || fixes.length === 0 ? [] : formatFindings(fixes).split("\n");
+    const left = [...capped, ...leftFixes];
     return fix("Stop", blockReason({ diffPath, fixes: docsFix ? fixes : [], capped: left, notes }));
   }
   const skipped = wantsReview ? `this session already had ${String(max)} reviews (maxFeedbackRounds)` : void 0;
