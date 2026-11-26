@@ -97,6 +97,8 @@ pnpm build    # bundles packages/hooks into plugin/scripts
 
 `examples/next-prisma-starter` is a small Next.js and Prisma app for trying theoldman end to end; its `SMOKE.md` has the prompts.
 
+The evals in `evals/` measure Claude Code with and without theoldman. Tasks live in `evals/tasks/` (see `_template/README.md`). Check a task without running Claude with `pnpm --filter evals run eval --task _template --condition with --runs 1 --dry-run`; it needs `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_USE_BEDROCK=1` with `AWS_REGION` and AWS credentials, and writes the planned run to `evals/runs/`.
+
 The bundles in `plugin/scripts` are committed, because the plugin installs from git with no build step. Run `pnpm build` after changing hook code and commit the result.
 
 ## Docs

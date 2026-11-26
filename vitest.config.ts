@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { configDefaults, defineConfig } from 'vitest/config';
 
 const hooks = fileURLToPath(new URL('./packages/hooks/', import.meta.url));
+const evals = fileURLToPath(new URL('./evals/', import.meta.url));
 const PERF_TESTS = 'test/**/*.perf.test.ts';
 
 export default defineConfig({
@@ -14,6 +15,13 @@ export default defineConfig({
           include: ['test/**/*.test.ts'],
           // Fixtures are inputs for the rule harness; one named *.test.ts is not a test file.
           exclude: [...configDefaults.exclude, PERF_TESTS, 'test/fixtures/**'],
+        },
+      },
+      {
+        test: {
+          name: 'evals',
+          root: evals,
+          include: ['test/**/*.test.ts'],
         },
       },
       {
