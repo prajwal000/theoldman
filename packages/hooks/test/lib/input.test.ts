@@ -78,6 +78,8 @@ describe('event input guards', () => {
     const start = { ...common, hook_event_name: 'SessionStart', source: 'startup' };
     expect(isCommonInput(start)).toBe(true);
     expect(isCommonInput({ ...start, cwd: undefined })).toBe(false);
+    expect(isCommonInput({ ...start, agent_type: 'theoldman:oldman-docs-writer' })).toBe(true);
+    expect(isCommonInput({ ...start, agent_type: ['x'] })).toBe(false);
     expect(isPromptHookInput({ ...common, prompt: 'fix the login bug' })).toBe(true);
     expect(isPromptHookInput({ ...common, prompt: ['x'] })).toBe(false);
     expect(isPromptHookInput(start)).toBe(false);

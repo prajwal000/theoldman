@@ -1,0 +1,14 @@
+# expect: OLDMAN-G07@2, OLDMAN-G07@3, OLDMAN-G07@4, OLDMAN-G07@5, OLDMAN-G07@6, OLDMAN-G07@7, OLDMAN-G07@8, OLDMAN-G07@9, OLDMAN-G07@10, OLDMAN-G07@11, OLDMAN-G07@12, OLDMAN-G07@13, OLDMAN-G07@14
+src/index.ts
+package.json
+.github/workflows/ci.yml
+docs/setup.sh
+docs/../src/notes.md
+docs\..\src\notes.md
+notes.md
+tests/readme.test.ts
+/home/me/proj/src/app.ts
+/home/me/other/README.md
+../README.md
+/etc/hosts
+.env
