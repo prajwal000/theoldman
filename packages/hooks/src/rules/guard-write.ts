@@ -4,7 +4,8 @@
 // OLDMAN-G06 blocks writing a private key file: `*.pem`, `*.key`, and SSH keys named
 // `id_rsa*`, `id_dsa*`, `id_ecdsa*` or `id_ed25519*`. Names compare case-insensitively, since
 // Windows and macOS file systems usually do, and paths can come in any of the forms
-// lib/paths.ts normalizes.
+// lib/paths.ts normalizes. OLDMAN-G08 (guard-pause.ts) blocks writing theoldman's paused flag;
+// OLDMAN-G09 (guard-config.ts) blocks writing theoldman's or Claude Code's settings.
 // OLDMAN-G07 limits theoldman's docs-writer subagent to documentation files. Claude Code names
 // the subagent in `agent_type`, which the model cannot set, so this does not rely on the agent
 // following its prompt. Other agents and the main agent are not affected. Agent instruction and
@@ -13,7 +14,9 @@
 
 import { isStrictlyInside, normalizePath, resolvePath, toProjectRelative } from '../lib/paths.js';
 import type { Finding, Rule } from '../lib/rules.js';
+import { configViolation, isProtectedConfig } from './guard-config.js';
 import type { Violation } from './guard-context.js';
+import { isPauseFlag, pauseViolation } from './guard-pause.js';
 
 const SSH_KEY = /^id_(?:rsa|dsa|ecdsa|ed25519)/;
 const KEY_EXTENSION = /\.(?:pem|key)$/;
@@ -31,8 +34,10 @@ function fileName(path: string): string {
   return (normalizePath(path).split('/').pop() ?? '').toLowerCase();
 }
 
-/** The G05 or G06 violation for writing `path`, if it is an env or private key file. */
+/** The G05, G06, G08 or G09 violation for writing `path`: env, key, paused flag or settings. */
 export function checkPath(path: string): Violation | undefined {
+  if (isPauseFlag(path)) return pauseViolation;
+  if (isProtectedConfig(path)) return configViolation;
   const name = fileName(path);
   if (name === '.env' || (name.startsWith('.env.') && name !== '.env.example')) {
     return {

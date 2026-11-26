@@ -51,6 +51,48 @@ export function defaultBranch(cwd: string, remote: string): string | undefined {
   return symbolicRef(cwd, `refs/remotes/${remote}/HEAD`)?.replace(`${remote}/`, '');
 }
 
+const COMMIT_HASH = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+function commitOf(cwd: string, rev: string): string | undefined {
+  try {
+    const hash = runGit(cwd, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]).trim();
+    return COMMIT_HASH.test(hash) ? hash : undefined;
+  } catch {
+    // No such branch or no commits yet.
+    return undefined;
+  }
+}
+
+/**
+ * Where the current branch left the default branch: the merge base of HEAD with the remote's
+ * default branch, else with origin/main, origin/master, main or master. Undefined when there
+ * are no commits or none of those branches exist.
+ */
+export function branchBase(
+  cwd: string,
+): { readonly commit: string; readonly branch: string } | undefined {
+  const head = commitOf(cwd, 'HEAD');
+  if (head === undefined) return undefined;
+  const remoteDefault = defaultBranch(cwd, 'origin');
+  const candidates = [
+    remoteDefault === undefined ? [] : [`origin/${remoteDefault}`],
+    ['origin/main', 'origin/master', 'main', 'master'],
+  ].flat();
+  for (const branch of candidates) {
+    const tip = commitOf(cwd, branch);
+    if (tip === undefined) continue;
+    let commit: string;
+    try {
+      commit = runGit(cwd, ['merge-base', head, tip]).trim();
+    } catch {
+      // Unrelated histories have no merge base; try the next candidate.
+      continue;
+    }
+    if (COMMIT_HASH.test(commit)) return { commit, branch };
+  }
+  return undefined;
+}
+
 /**
  * The file's committed content at HEAD, or undefined when it has none: outside a repo, no
  * commits yet, untracked or only staged, or git is unavailable.

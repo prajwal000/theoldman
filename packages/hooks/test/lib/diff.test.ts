@@ -130,6 +130,17 @@ describe('workingTreeDiff', () => {
     expect(workingTreeDiff(repo, [])).toBe('');
   });
 
+  it('compares with a given base commit, and throws if that commit does not exist', () => {
+    const repo = repoWith({ 'a.ts': 'a\n' });
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+    write(repo, { 'a.ts': 'a2\n' });
+    git(repo, 'commit', '-q', '-am', 'second');
+    write(repo, { 'b.ts': 'b\n' });
+    const files = parseDiff(workingTreeDiff(repo, undefined, base));
+    expect(files.map((file) => file.path).sort()).toEqual(['a.ts', 'b.ts']);
+    expect(() => workingTreeDiff(repo, undefined, '0'.repeat(40))).toThrow();
+  });
+
   it('throws outside a git repository', () => {
     expect(() => workingTreeDiff(dir)).toThrow();
   });

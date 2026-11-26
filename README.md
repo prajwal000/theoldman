@@ -29,6 +29,18 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
+## Commands
+
+| Command             | What it does                                                                                                                                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/theoldman:init`   | Writes `.theoldman.json` with the stack found in `package.json`, and adds a short theoldman section to `CLAUDE.md`. Never overwrites either.                                                                                           |
+| `/theoldman:review` | Reviews the current branch against the default branch, uncommitted work included, with the reviewer and verifier subagents, and reports the confirmed findings. Add "and fix them" to have Claude fix the Critical and Important ones. |
+| `/theoldman:docs`   | Checks the README, `.env.example`, ADRs and CHANGELOG against the code and proposes fixes.                                                                                                                                             |
+| `/theoldman:off`    | Pauses the rules, edit checks and review for this project. The guards stay on.                                                                                                                                                         |
+| `/theoldman:on`     | Turns them back on.                                                                                                                                                                                                                    |
+
+`init`, `off` and `on` only run when you type them: Claude cannot start them, and the guard blocks it from pausing or resuming theoldman any other way (OLDMAN-G08). The first time you run a command that starts a script, Claude Code asks you to allow it.
+
 ## Rules at session start and with each prompt
 
 When a session starts, and again after `/clear` or compaction, theoldman gives Claude a short summary of the core rules and the stack it found in `package.json`. Set `stack` in `.theoldman.json` to override the detected stack. At level `quick` the summary is left out.
@@ -47,14 +59,20 @@ When Claude stops after changing code, theoldman writes the session's diff to `.
 
 Only this session's changes count, including edits made through Bash; uncommitted work from before the session is left out. theoldman asks at most `maxFeedbackRounds` times per session and never twice for the same diff. Set `"review": { "onStop": false }` or `"level": "quick"` in `.theoldman.json` to turn the review off. Claude Code shows each review request as a "stop hook problem" notification; that is its label for a Stop hook asking Claude to continue, not an error.
 
+## Settings stay yours
+
+Claude cannot weaken theoldman by changing its settings instead of pausing it. The guard blocks Claude from creating, editing or deleting `.theoldman.json`, anything under `.theoldman/`, Claude Code's `.claude/settings.json`, `.claude/settings.local.json` and `managed-settings.json`, and installed plugins under `.claude/plugins/`. That covers the Write and Edit tools, Bash and PowerShell redirects, and commands that write, move or delete files (OLDMAN-G09). It also blocks Claude from pausing theoldman itself (OLDMAN-G08). Reading these files is still allowed.
+
+To change a setting, edit the file yourself or run `/theoldman:init`. Claude Code's own check stops the Write and Edit tools from changing its settings files, but not a Bash redirect, and not anything in bypass-permissions mode.
+
 ## What the guard does not catch
 
-The guard reads each command before it runs and blocks the risky ones: force-push or deleting `main`, `--no-verify`, `rm -rf` outside the project, and resets of a database that is not local. It also looks inside `bash -c`, `cmd /c` and `pwsh -Command` (including `-EncodedCommand`), follows `cd` on the same line, and reads the `package.json` scripts that `npm run`, `pnpm` or `yarn` would start.
+The guard reads each command before it runs and blocks the risky ones: force-push or deleting `main`, `--no-verify`, `rm -rf` outside the project, resets of a database that is not local, and writes to theoldman's and Claude Code's settings. It also looks inside `bash -c`, `cmd /c` and `pwsh -Command` (including `-EncodedCommand`), follows `cd` on the same line, and reads the `package.json` scripts that `npm run`, `pnpm` or `yarn` would start.
 
 It catches honest mistakes, not deliberate evasion. It reads text and does not run a shell, so it cannot see:
 
 - values only known at run time: variables (`rm -rf "$DIR"`), aliases, shell functions and `eval` or `Invoke-Expression` on strings built at run time;
-- what script files do (`./reset.sh`, `pwsh -File deploy.ps1`);
+- what script files and inline programs do (`./reset.sh`, `pwsh -File deploy.ps1`, `node -e "..."`), including writing to settings files;
 - the remote's default branch when git never recorded it locally; then only `main` and `master` are protected.
 
 It can also block by mistake: a heredoc that contains a blocked command, or `DROP TABLE` text in a line that also runs `psql`.

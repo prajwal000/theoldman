@@ -13,6 +13,7 @@ import {
   notify,
   pass,
   runHook,
+  say,
   warn,
   writeOutput,
 } from '../../src/lib/output.js';
@@ -78,6 +79,12 @@ describe('fix', () => {
     // @ts-expect-error -- the Stop overload has no context parameter.
     const output = fix('Stop', 'Fix this.', 'Also note that.');
     expect(output.stdout).toContain('additionalContext');
+  });
+});
+
+describe('say', () => {
+  it('prints one line of plain text and exits 0', () => {
+    expect(say('Paused.')).toEqual({ exitCode: 0, stdout: 'Paused.\n', stderr: '' });
   });
 });
 

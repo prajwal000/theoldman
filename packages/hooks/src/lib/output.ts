@@ -68,6 +68,11 @@ export function notify(message: string): HookOutput {
   return json({ systemMessage: message });
 }
 
+/** Plain text for the person or skill that ran a command script (not a hook). */
+export function say(text: string): HookOutput {
+  return { exitCode: 0, stdout: `${text}\n`, stderr: '' };
+}
+
 export function failOpen(message: string): HookOutput {
   return { exitCode: 1, stdout: '', stderr: `theoldman: ${message}\n` };
 }

@@ -4,7 +4,9 @@
 // master or the remote's default branch, and deleting one of them on the remote. OLDMAN-G02
 // blocks skipping git hooks (`commit --no-verify` / `-n`, `push --no-verify`). OLDMAN-G03
 // (guard-rm.ts) blocks recursive forced deletes outside the project; OLDMAN-G04 (guard-db.ts)
-// blocks destructive database commands unless the database is local. OLDMAN-S01 (secrets.ts)
+// blocks destructive database commands unless the database is local. OLDMAN-G08 (guard-pause.ts)
+// blocks running theoldman's pause script or touching its paused flag; OLDMAN-G09
+// (guard-config.ts) blocks writing theoldman's or Claude Code's settings. OLDMAN-S01 (secrets.ts)
 // blocks a secret in the command text, such as `echo "sk_live_..." > key.txt`, without ever
 // repeating it. command-expand.ts also
 // checks strings passed to `bash -c`, `cmd /c` and `pwsh -Command` / `-EncodedCommand`, and the
@@ -27,7 +29,9 @@ import { programName } from '../lib/shell.js';
 import { expandCommands } from './command-expand.js';
 import { commitSkipsHooks, gitInvocation, parsePush, refspecTarget } from './git-args.js';
 import type { GitContext, GuardContext, Violation } from './guard-context.js';
+import { configCommandViolation } from './guard-config.js';
 import { databaseViolation } from './guard-db.js';
+import { pauseCommandViolation } from './guard-pause.js';
 import { removalViolation } from './guard-rm.js';
 import { commandSecretMessage, scanSecrets } from './secrets.js';
 
@@ -99,9 +103,11 @@ export function checkCommand(text: string, dialect: Dialect, context: GuardConte
   const found = new Map<string, Violation>();
   for (const unit of expandCommands(text, dialect, context)) {
     const violations = [
-      ...unit.commands.flatMap(({ words, cwd }) => [
+      ...unit.commands.flatMap(({ words, cwd, redirects }) => [
         ...gitViolations(words, context),
         removalViolation(words, unit.dialect, cwd, context),
+        pauseCommandViolation(words, redirects),
+        configCommandViolation(words, redirects),
       ]),
       databaseViolation(unit, context),
     ];

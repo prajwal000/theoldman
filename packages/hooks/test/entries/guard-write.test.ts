@@ -63,6 +63,31 @@ describe('guard-write hook', () => {
     expect(reason(runGuard(edit))).toMatch(/^OLDMAN-G06: /);
   });
 
+  it('keeps guarding while theoldman is paused, and blocks writing the paused flag', () => {
+    const paused = join(root, 'paused-project');
+    mkdirSync(join(paused, '.theoldman', 'state'), { recursive: true });
+    writeFileSync(join(paused, '.theoldman', 'state', 'paused'), '');
+    const env = { CLAUDE_PROJECT_DIR: paused };
+    expect(reason(runGuard(write(join(paused, '.env'), 'X=1\n', paused), env))).toMatch(
+      /^OLDMAN-G05: /,
+    );
+    const flag = write(join(paused, '.theoldman', 'state', 'paused'), '', paused);
+    expect(reason(runGuard(flag, env))).toMatch(/^OLDMAN-G08: /);
+  });
+
+  it('blocks a Write or Edit of theoldman or Claude Code settings', () => {
+    expect(reason(runGuard(write(join(project, '.theoldman.json'), '{}\n')))).toMatch(
+      /^OLDMAN-G09: /,
+    );
+    const edit = input('Edit', {
+      file_path: join(project, '.claude', 'settings.local.json'),
+      old_string: '{}',
+      new_string: '{"disableAllHooks": true}',
+      replace_all: false,
+    });
+    expect(reason(runGuard(edit))).toMatch(/^OLDMAN-G09: /);
+  });
+
   it('says nothing about other files', () => {
     expect(runGuard(write(join(project, '.env.example')))).toEqual({
       status: 0,

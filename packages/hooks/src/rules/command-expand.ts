@@ -14,6 +14,7 @@ export interface LocatedCommand {
   readonly words: readonly string[];
   /** Undefined after a `cd` the guard cannot follow, such as `cd "$DIR"` or `cd -`. */
   readonly cwd: string | undefined;
+  readonly redirects: readonly string[];
 }
 
 export interface CommandUnit {
@@ -101,7 +102,7 @@ export function expandCommands(
     units.push({ text: line, dialect: lineDialect, commands, variables });
     let cwd = startCwd;
     const stack: (string | undefined)[] = [];
-    for (const { assignments, words: raw } of parseCommands(line, lineDialect)) {
+    for (const { assignments, words: raw, redirects } of parseCommands(line, lineDialect)) {
       const exported = raw[0] === 'export' ? raw.slice(1) : [];
       for (const piece of [...assignments, ...exported]) setVariable(variables, piece);
       // PowerShell splits `$env:NAME = "value"` into words; joined they read `$env:NAME=value`.
@@ -139,7 +140,7 @@ export function expandCommands(
       if (nested !== undefined && depth < MAX_NESTING) {
         visit(nested.text, nested.dialect, cwd, variables, depth + 1, scriptDepth);
       }
-      commands.push({ words, cwd });
+      commands.push({ words, cwd, redirects });
     }
   };
 

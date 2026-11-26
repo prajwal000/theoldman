@@ -4,9 +4,19 @@ import { parseCommands, programName, splitCommands } from '../../src/lib/shell.j
 describe('parseCommands', () => {
   it('keeps leading assignments apart, including assignment-only commands', () => {
     expect(parseCommands('A=1 B=x sudo C=2 npx prisma; D=3', 'bash')).toEqual([
-      { assignments: ['A=1', 'B=x', 'C=2'], words: ['npx', 'prisma'] },
-      { assignments: ['D=3'], words: [] },
+      { assignments: ['A=1', 'B=x', 'C=2'], words: ['npx', 'prisma'], redirects: [] },
+      { assignments: ['D=3'], words: [], redirects: [] },
     ]);
+  });
+
+  it('keeps redirect targets apart, attached or not, but not &N targets', () => {
+    expect(parseCommands('echo x > out.txt 2>&1 >>log.txt < in.txt', 'bash')).toEqual([
+      { assignments: [], words: ['echo', 'x'], redirects: ['out.txt', 'log.txt', 'in.txt'] },
+    ]);
+    expect(parseCommands("'' > .theoldman\\state\\paused", 'powershell')[0]?.redirects).toEqual([
+      '.theoldman\\state\\paused',
+    ]);
+    expect(parseCommands('echo x >', 'bash')[0]?.redirects).toEqual([]);
   });
 });
 

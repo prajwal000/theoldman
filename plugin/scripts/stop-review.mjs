@@ -186,13 +186,14 @@ new file mode 100644
 @@ -0,0 +1,${String(lines.length)} @@
 ${body}`;
 }
-function workingTreeDiff(cwd, paths) {
+function workingTreeDiff(cwd, paths, base = "HEAD") {
   if (paths?.length === 0) return "";
   const pathspecs = ["--", ...(paths ?? []).map((path) => `:(literal)${path}`)];
   let tracked;
   try {
-    tracked = runGit(cwd, [...DIFF_ARGS, "HEAD", ...pathspecs]);
-  } catch {
+    tracked = runGit(cwd, [...DIFF_ARGS, base, ...pathspecs]);
+  } catch (error) {
+    if (base !== "HEAD") throw error;
     tracked = runGit(cwd, [...DIFF_ARGS, "--cached", ...pathspecs]);
   }
   const untracked = runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z", ...pathspecs]).split("\0").filter((path) => path !== "");
