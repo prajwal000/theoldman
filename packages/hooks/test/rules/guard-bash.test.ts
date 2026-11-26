@@ -2,6 +2,45 @@ import { describe, expect, it } from 'vitest';
 import { checkCommand, guardBashRule } from '../../src/rules/guard-bash.js';
 import { assertFast, runRuleOnFixtures } from '../harness.js';
 import { fakeContext } from './fake-context.js';
+import { FAKE_SECRETS, fillFakes } from './fake-secrets.js';
+
+describe('OLDMAN-S01 secrets in commands', () => {
+  const check = (line: string, dialect: 'bash' | 'powershell' = 'bash') =>
+    checkCommand(fillFakes(line), dialect, fakeContext().context);
+
+  it.each([
+    ['bash', 'echo "{{fake:stripe-live}}" > key.txt'],
+    ['bash', 'export STRIPE_SECRET={{fake:high-entropy}}'],
+    ['bash', 'printf %s "{{fake:github-classic}}" | gh auth login --with-token'],
+    ['bash', `bash -c 'echo {{fake:anthropic}} >> .env.local'`],
+    ['powershell', "Set-Content key.txt '{{fake:openai-project}}'"],
+    ['powershell', '$env:AWS_ACCESS_KEY_ID = "{{fake:aws-key-id}}"'],
+  ] as const)('blocks a secret in %s: %s', (dialect, line) => {
+    expect(check(line, dialect).map((v) => v.id)).toContain('OLDMAN-S01');
+  });
+
+  it.each([
+    'echo "$STRIPE_SECRET" > key.txt',
+    'curl -H "Authorization: Bearer $TOKEN" https://api.example.com',
+    'git checkout {{fake:hex-secret}}',
+    'echo "API_KEY=your-key-here" >> .env.example',
+  ])('allows %s', (line) => {
+    expect(check(line).map((v) => v.id)).not.toContain('OLDMAN-S01');
+  });
+
+  it('names the line and kind but never the value', () => {
+    for (const value of Object.values(FAKE_SECRETS)) {
+      const violation = checkCommand(
+        `true\nexport SERVICE_TOKEN='${value}'`,
+        'bash',
+        fakeContext().context,
+      ).find((v) => v.id === 'OLDMAN-S01');
+      expect(violation?.message).toMatch(/^line 2 of the command looks like /);
+      expect(violation?.message).not.toContain(value);
+      expect(violation?.message).not.toContain(value.slice(-8));
+    }
+  });
+});
 
 /** A repo on a feature branch whose remote default is main, counting git lookups. */
 function fakeGit(current: string | undefined = 'feature/x', defaults: Record<string, string> = {}) {
