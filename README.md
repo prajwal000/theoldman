@@ -35,6 +35,8 @@ When a session starts, and again after `/clear` or compaction, theoldman gives C
 
 With each prompt, a keyword router picks up to two topics (auth, db, api, infra, tests, git, docs, ui) and adds at most four rule lines for them. A prompt like "thanks" gets nothing. The router makes no model call.
 
+The full rules are in skills that Claude loads when a task needs them: `oldman-rules` for every change, plus `oldman-security`, `oldman-database`, `oldman-testing`, `oldman-docs` and `oldman-git`.
+
 ## Checks after each edit
 
 After each Write or Edit, theoldman checks the lines Claude added for change-narration comments, commented-out code, TODOs with no issue or owner, banner comments, `any`, `console.log`, empty `catch` blocks and `debugger`. Findings are listed as `OLDMAN-C01 src/a.ts:12 <message>` and Claude is asked to fix them. Some, like comments that repeat the code, are passed on as warnings only. After `maxFeedbackRounds` requests per kind of check (default 2) in a session, theoldman stops asking and records what is left. Session state lives in `.theoldman/`, which contains its own `.gitignore`, so git ignores it without changes to yours. Use `disable` and `ignorePaths` in `.theoldman.json` to turn rules or paths off.
