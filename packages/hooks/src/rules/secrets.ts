@@ -83,6 +83,11 @@ export function secretMessage(file: string, finding: SecretFinding): string {
   return `${file}:${String(finding.line)} looks like ${finding.kind}. Do not write secrets into files: read the value from an environment variable and keep it out of the repo.`;
 }
 
+/** For a secret in a Bash or PowerShell command, such as `echo "sk_live_..." > key.txt`. */
+export function commandSecretMessage(finding: SecretFinding): string {
+  return `line ${String(finding.line)} of the command looks like ${finding.kind}. Do not put secrets in commands: they end up in shell history, logs and files. Read the value from an environment variable instead.`;
+}
+
 /** The scanner as a Rule for fixtures: every line of the file counts as written. */
 export function secretsRule(): Rule {
   return ({ file, content }) =>

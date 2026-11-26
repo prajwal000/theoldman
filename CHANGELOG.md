@@ -10,3 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Plugin manifest and marketplace, installable with `/plugin install theoldman@theoldman`.
 - `oldman-rules` skill with the core rules for writing and reviewing code.
+- Guard hooks that block risky actions before they run, from both the Bash and PowerShell tools:
+  - force-pushing or deleting `main`, `master` or the remote's default branch (OLDMAN-G01);
+  - skipping git hooks with `--no-verify` (OLDMAN-G02);
+  - `rm -rf` or `Remove-Item -Recurse -Force` outside the project (OLDMAN-G03);
+  - destructive database commands against a database that is not local (OLDMAN-G04);
+  - writing `.env` files (except `.env.example`) or private key files (OLDMAN-G05, OLDMAN-G06);
+  - secrets in written files or in commands, reported without repeating the secret (OLDMAN-S01).
+- The command guard also checks `bash -c`, `cmd /c` and `pwsh -Command` strings, `package.json` scripts started with `npm run`, `pnpm` or `yarn`, and `cd` earlier on the same line. Turn any rule off with `disable` in `.theoldman.json`.

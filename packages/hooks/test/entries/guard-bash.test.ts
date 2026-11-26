@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildHooks } from '../../build.mjs';
+import { FAKE_SECRETS } from '../rules/fake-secrets.js';
 
 const root = mkdtempSync(join(tmpdir(), 'theoldman-guard-bash-'));
 const outDir = join(root, 'scripts');
@@ -184,6 +185,20 @@ describe('guard-bash hook', () => {
     );
     expect(runGuard(hookInput('PowerShell', 'pnpm build', pkg)).stdout).toBe('');
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it('blocks a secret in the command without ever printing it', () => {
+    for (const [tool, line] of [
+      ['Bash', `echo "${FAKE_SECRETS['stripe-live'] ?? ''}" > key.txt`],
+      ['PowerShell', `Set-Content key.txt '${FAKE_SECRETS.anthropic ?? ''}'`],
+    ] as const) {
+      const run = runGuard(hookInput(tool, line));
+      expect(denyReason(run)).toMatch(/^OLDMAN-S01: line 1 of the command looks like /);
+      for (const value of Object.values(FAKE_SECRETS)) {
+        expect(run.stdout + run.stderr).not.toContain(value);
+        expect(run.stdout + run.stderr).not.toContain(value.slice(-8));
+      }
+    }
   });
 
   it('checks a PowerShell -EncodedCommand', () => {

@@ -4,7 +4,9 @@
 // master or the remote's default branch, and deleting one of them on the remote. OLDMAN-G02
 // blocks skipping git hooks (`commit --no-verify` / `-n`, `push --no-verify`). OLDMAN-G03
 // (guard-rm.ts) blocks recursive forced deletes outside the project; OLDMAN-G04 (guard-db.ts)
-// blocks destructive database commands unless the database is local. command-expand.ts also
+// blocks destructive database commands unless the database is local. OLDMAN-S01 (secrets.ts)
+// blocks a secret in the command text, such as `echo "sk_live_..." > key.txt`, without ever
+// repeating it. command-expand.ts also
 // checks strings passed to `bash -c`, `cmd /c` and `pwsh -Command` / `-EncodedCommand`, and the
 // package.json scripts that `npm|pnpm|yarn run` would start.
 //
@@ -27,6 +29,7 @@ import { commitSkipsHooks, gitInvocation, parsePush, refspecTarget } from './git
 import type { GitContext, GuardContext, Violation } from './guard-context.js';
 import { databaseViolation } from './guard-db.js';
 import { removalViolation } from './guard-rm.js';
+import { commandSecretMessage, scanSecrets } from './secrets.js';
 
 export type { GitContext, GuardContext, Violation } from './guard-context.js';
 
@@ -106,6 +109,10 @@ export function checkCommand(text: string, dialect: Dialect, context: GuardConte
       if (violation !== undefined && !found.has(violation.id)) found.set(violation.id, violation);
     }
   }
+  // The raw text covers secrets anywhere in the line, nested strings included.
+  const [secret] = scanSecrets(text);
+  if (secret !== undefined)
+    found.set('OLDMAN-S01', { id: 'OLDMAN-S01', message: commandSecretMessage(secret) });
   return [...found.values()];
 }
 
