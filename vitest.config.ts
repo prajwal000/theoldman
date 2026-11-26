@@ -12,7 +12,8 @@ export default defineConfig({
           name: 'hooks',
           root: hooks,
           include: ['test/**/*.test.ts'],
-          exclude: [...configDefaults.exclude, PERF_TESTS],
+          // Fixtures are inputs for the rule harness; one named *.test.ts is not a test file.
+          exclude: [...configDefaults.exclude, PERF_TESTS, 'test/fixtures/**'],
         },
       },
       {

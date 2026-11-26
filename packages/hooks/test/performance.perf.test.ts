@@ -12,6 +12,7 @@ import { c06 } from '../src/rules/comment-density.js';
 import { c01, c04, c05 } from '../src/rules/comments.js';
 import { guardBashRule } from '../src/rules/guard-bash.js';
 import { guardWriteRule } from '../src/rules/guard-write.js';
+import { q01, q02, q03, q04 } from '../src/rules/quality.js';
 import { secretsRule } from '../src/rules/secrets.js';
 import { assertFast, medianMs, SPEED_LIMIT_MS, SPEED_RUNS } from './harness.js';
 import { fakeContext } from './rules/fake-context.js';
@@ -132,6 +133,17 @@ describe('comment rules on 2,000 lines', () => {
     ['OLDMAN-C04', c04],
     ['OLDMAN-C05', c05],
     ['OLDMAN-C06', c06],
+  ])('%s', (_id, rule) => {
+    assertFast(rule);
+  });
+});
+
+describe('quality rules on 2,000 lines', () => {
+  it.each([
+    ['OLDMAN-Q01', q01],
+    ['OLDMAN-Q02', q02],
+    ['OLDMAN-Q03', q03],
+    ['OLDMAN-Q04', q04],
   ])('%s', (_id, rule) => {
     assertFast(rule);
   });
