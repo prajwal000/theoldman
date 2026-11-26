@@ -7,7 +7,9 @@
 // lib/paths.ts normalizes.
 // OLDMAN-G07 limits theoldman's docs-writer subagent to documentation files. Claude Code names
 // the subagent in `agent_type`, which the model cannot set, so this does not rely on the agent
-// following its prompt. Other agents and the main agent are not affected.
+// following its prompt. Other agents and the main agent are not affected. Agent instruction and
+// config files are blocked even when they are Markdown: the docs writer reads untrusted repository
+// text, and an edit there could persist a prompt injection into later sessions.
 
 import { isStrictlyInside, normalizePath, resolvePath, toProjectRelative } from '../lib/paths.js';
 import type { Finding, Rule } from '../lib/rules.js';
@@ -20,6 +22,10 @@ export const DOCS_WRITER = 'theoldman:oldman-docs-writer';
 // README and CHANGELOG with a doc extension or none, so `readme.test.ts` does not count.
 const DOC_NAME =
   /^(?:(?:readme|changelog)(?:[.-][\w-]+)*\.(?:md|mdx|markdown|txt|rst|adoc)|readme|changelog|\.env\.example|(?:openapi|swagger)(?:\.[\w-]+)*\.(?:json|ya?ml))$/;
+const ROOT_DOC_NAME = /^(?:contributing|security|code_of_conduct|support)\.md$/;
+const INSTRUCTION_NAME =
+  /^(?:claude(?:\.local)?\.md|agents\.md|review\.md|\.theoldman\.json|licen[cs]e(?:\.[\w-]+)?)$/;
+const INSTRUCTION_DIRS: readonly string[] = ['.claude', '.github'];
 
 function fileName(path: string): string {
   return (normalizePath(path).split('/').pop() ?? '').toLowerCase();
@@ -43,17 +49,40 @@ export function checkPath(path: string): Violation | undefined {
   return undefined;
 }
 
+/** `path` relative to the project and lower-cased, with `..` resolved; undefined if outside. */
+function projectRelative(path: string, projectDir: string): string | undefined {
+  const root = resolvePath(projectDir, '/');
+  if (!isStrictlyInside(path, root)) return undefined;
+  return toProjectRelative(resolvePath(path, root), root).toLowerCase();
+}
+
+/** Agent instructions and config: CLAUDE.md, AGENTS.md, `.claude/`, `.github/` and the like. */
+function isInstruction(relative: string): boolean {
+  const parts = relative.split('/');
+  return (
+    INSTRUCTION_NAME.test(parts.at(-1) ?? '') ||
+    parts.slice(0, -1).some((part) => INSTRUCTION_DIRS.includes(part))
+  );
+}
+
+function isDoc(relative: string): boolean {
+  const name = relative.split('/').pop() ?? '';
+  return (
+    DOC_NAME.test(name) ||
+    (relative === name && ROOT_DOC_NAME.test(name)) ||
+    (relative.startsWith('docs/') && name.endsWith('.md'))
+  );
+}
+
 /**
- * True for a documentation file inside the project: README and CHANGELOG files, Markdown under
- * `docs/`, `.env.example`, and OpenAPI or Swagger files. `..` is resolved first, so
- * `docs/../src/a.md` is `src/a.md`.
+ * True for a documentation file inside the project that is not an agent instruction or config
+ * file: README and CHANGELOG files, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT and SUPPORT at the
+ * root, Markdown under `docs/`, `.env.example`, and OpenAPI or Swagger files. `..` is resolved
+ * first, so `docs/../src/a.md` is `src/a.md`.
  */
 export function isDocPath(path: string, projectDir: string): boolean {
-  const root = resolvePath(projectDir, '/');
-  if (!isStrictlyInside(path, root)) return false;
-  const relative = toProjectRelative(resolvePath(path, root), root).toLowerCase();
-  const name = relative.split('/').pop() ?? '';
-  return DOC_NAME.test(name) || (relative.startsWith('docs/') && name.endsWith('.md'));
+  const relative = projectRelative(path, projectDir);
+  return relative !== undefined && !isInstruction(relative) && isDoc(relative);
 }
 
 /**
@@ -66,10 +95,18 @@ export function checkAgentPath(
   agentType: string | undefined,
   cwd = projectDir,
 ): Violation | undefined {
-  if (agentType !== DOCS_WRITER || isDocPath(resolvePath(path, cwd), projectDir)) return undefined;
+  if (agentType !== DOCS_WRITER) return undefined;
+  const relative = projectRelative(resolvePath(path, cwd), projectDir);
+  if (relative !== undefined && isInstruction(relative)) {
+    return {
+      id: 'OLDMAN-G07',
+      message: `${path} holds agent instructions or config. The docs writer may not change it, because an edit there could persist a prompt injection. Describe the change in your reply instead.`,
+    };
+  }
+  if (relative !== undefined && isDoc(relative)) return undefined;
   return {
     id: 'OLDMAN-G07',
-    message: `${path} is not a documentation file. The docs writer may only change README and CHANGELOG files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.`,
+    message: `${path} is not a documentation file. The docs writer may only change README and CHANGELOG files, root CONTRIBUTING, SECURITY, CODE_OF_CONDUCT and SUPPORT files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.`,
   };
 }
 

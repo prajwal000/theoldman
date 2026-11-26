@@ -208,6 +208,9 @@ var SSH_KEY = /^id_(?:rsa|dsa|ecdsa|ed25519)/;
 var KEY_EXTENSION = /\.(?:pem|key)$/;
 var DOCS_WRITER = "theoldman:oldman-docs-writer";
 var DOC_NAME = /^(?:(?:readme|changelog)(?:[.-][\w-]+)*\.(?:md|mdx|markdown|txt|rst|adoc)|readme|changelog|\.env\.example|(?:openapi|swagger)(?:\.[\w-]+)*\.(?:json|ya?ml))$/;
+var ROOT_DOC_NAME = /^(?:contributing|security|code_of_conduct|support)\.md$/;
+var INSTRUCTION_NAME = /^(?:claude(?:\.local)?\.md|agents\.md|review\.md|\.theoldman\.json|licen[cs]e(?:\.[\w-]+)?)$/;
+var INSTRUCTION_DIRS = [".claude", ".github"];
 function fileName(path) {
   return (normalizePath(path).split("/").pop() ?? "").toLowerCase();
 }
@@ -227,18 +230,32 @@ function checkPath(path) {
   }
   return void 0;
 }
-function isDocPath(path, projectDir) {
+function projectRelative(path, projectDir) {
   const root = resolvePath(projectDir, "/");
-  if (!isStrictlyInside(path, root)) return false;
-  const relative = toProjectRelative(resolvePath(path, root), root).toLowerCase();
+  if (!isStrictlyInside(path, root)) return void 0;
+  return toProjectRelative(resolvePath(path, root), root).toLowerCase();
+}
+function isInstruction(relative) {
+  const parts = relative.split("/");
+  return INSTRUCTION_NAME.test(parts.at(-1) ?? "") || parts.slice(0, -1).some((part) => INSTRUCTION_DIRS.includes(part));
+}
+function isDoc(relative) {
   const name = relative.split("/").pop() ?? "";
-  return DOC_NAME.test(name) || relative.startsWith("docs/") && name.endsWith(".md");
+  return DOC_NAME.test(name) || relative === name && ROOT_DOC_NAME.test(name) || relative.startsWith("docs/") && name.endsWith(".md");
 }
 function checkAgentPath(path, projectDir, agentType, cwd = projectDir) {
-  if (agentType !== DOCS_WRITER || isDocPath(resolvePath(path, cwd), projectDir)) return void 0;
+  if (agentType !== DOCS_WRITER) return void 0;
+  const relative = projectRelative(resolvePath(path, cwd), projectDir);
+  if (relative !== void 0 && isInstruction(relative)) {
+    return {
+      id: "OLDMAN-G07",
+      message: `${path} holds agent instructions or config. The docs writer may not change it, because an edit there could persist a prompt injection. Describe the change in your reply instead.`
+    };
+  }
+  if (relative !== void 0 && isDoc(relative)) return void 0;
   return {
     id: "OLDMAN-G07",
-    message: `${path} is not a documentation file. The docs writer may only change README and CHANGELOG files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.`
+    message: `${path} is not a documentation file. The docs writer may only change README and CHANGELOG files, root CONTRIBUTING, SECURITY, CODE_OF_CONDUCT and SUPPORT files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.`
   };
 }
 
