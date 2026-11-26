@@ -10,6 +10,9 @@ export default defineConfig(
     'plugin/scripts/',
     // Rule fixtures are deliberately bad code, checked by the rule harness, not by lint.
     'packages/hooks/test/fixtures/',
+    // Sample apps for smoke tests: their dependencies are never installed here, so typed lint
+    // rules cannot resolve them. Prettier still checks their formatting.
+    'examples/',
   ]),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,
