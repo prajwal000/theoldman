@@ -42,6 +42,7 @@ describe('plugin/hooks/hooks.json', () => {
       }),
     ).toEqual([
       ['SessionStart', undefined, '${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs'],
+      ['UserPromptSubmit', undefined, '${CLAUDE_PLUGIN_ROOT}/scripts/prompt-router.mjs'],
       ['PreToolUse', 'Bash|PowerShell', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-bash.mjs'],
       ['PreToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-write.mjs'],
       ['PostToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/check-file.mjs'],

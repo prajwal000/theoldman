@@ -29,9 +29,11 @@ Requires Claude Code 2.1.332 or later and Node 22.13+.
 /theoldman:init
 ```
 
-## Rules at session start
+## Rules at session start and with each prompt
 
 When a session starts, and again after `/clear` or compaction, theoldman gives Claude a short summary of the core rules and the stack it found in `package.json`. Set `stack` in `.theoldman.json` to override the detected stack. At level `quick` the summary is left out.
+
+With each prompt, a keyword router picks up to two topics (auth, db, api, infra, tests, git, docs, ui) and adds at most four rule lines for them. A prompt like "thanks" gets nothing. The router makes no model call.
 
 ## Checks after each edit
 
