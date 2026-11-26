@@ -98,6 +98,13 @@ describe('stop-review hook', { timeout: 30_000 }, () => {
     expect(runStop(dir)).toEqual(silent);
   });
 
+  it("ignores theoldman's own config and the paths in ignorePaths", () => {
+    const dir = newRepo();
+    write(dir, { '.theoldman.json': JSON.stringify({ ignorePaths: ['generated/**'] }) });
+    write(dir, { 'CLAUDE.md': '## theoldman\n', 'generated/api.ts': 'export const x = 1;\n' });
+    expect(runStop(dir)).toEqual(silent);
+  });
+
   it('asks once for the review, with the diff of the session written to the state file', () => {
     const dir = newRepo();
     edit(dir, { 'src/a.ts': 'export const a = 2;\n', 'src/new.ts': 'export const n = 1;\n' });

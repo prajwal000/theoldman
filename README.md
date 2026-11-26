@@ -57,7 +57,7 @@ After each Write or Edit, theoldman checks the lines Claude added for change-nar
 
 When Claude stops after changing code, theoldman writes the session's diff to `.theoldman/state/<session>/diff.patch` and asks Claude once to have it reviewed. The `oldman-reviewer` subagent reports findings, the `oldman-verifier` subagent keeps only the ones it can confirm in the code, and Claude fixes the confirmed Critical and Important ones. Both subagents can only read files. The same step checks the diff for variables missing from `.env.example`, and notes route, dependency and setup changes that have no matching docs.
 
-Only this session's changes count, including edits made through Bash; uncommitted work from before the session is left out. theoldman asks at most `maxFeedbackRounds` times per session and never twice for the same diff. Set `"review": { "onStop": false }` or `"level": "quick"` in `.theoldman.json` to turn the review off. Claude Code shows each review request as a "stop hook problem" notification; that is its label for a Stop hook asking Claude to continue, not an error.
+Only this session's changes count, including edits made through Bash; uncommitted work from before the session, `.theoldman.json` and paths in `ignorePaths` are left out. theoldman asks at most `maxFeedbackRounds` times per session and never twice for the same diff. Set `"review": { "onStop": false }` or `"level": "quick"` in `.theoldman.json` to turn the review off. Claude Code shows each review request as a "stop hook problem" notification; that is its label for a Stop hook asking Claude to continue, not an error.
 
 ## Settings stay yours
 

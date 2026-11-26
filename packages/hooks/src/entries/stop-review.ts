@@ -7,10 +7,11 @@
 // block reason, or to the user only as a systemMessage.
 
 import { createHash } from 'node:crypto';
-import { loadConfig } from '../lib/config.js';
+import { CONFIG_FILE, loadConfig } from '../lib/config.js';
 import { newFileDiff, parseDiff, workingTreeDiff } from '../lib/diff.js';
 import { isRecord, isStopHookInput, readHookInput } from '../lib/input.js';
 import { failOpen, fix, formatFindings, notify, pass, runHook } from '../lib/output.js';
+import { isIgnored } from '../lib/paths.js';
 import { sessionChanges } from '../lib/session-changes.js';
 import {
   addRound,
@@ -47,7 +48,11 @@ runHook(() => {
   // Claude Code exports CLAUDE_PROJECT_DIR to every hook; cwd can be a subdirectory of it.
   const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
   if (isPaused(root)) return pass();
-  const paths = sessionChanges(root, session);
+  const { config } = loadConfig(root);
+  // theoldman's own config is not code to review, nor are paths the user told it to ignore.
+  const paths = sessionChanges(root, session).filter(
+    (path) => path !== CONFIG_FILE && !isIgnored(path, root, config.ignorePaths),
+  );
   if (paths.length === 0) return pass();
   const diff = sessionDiff(root, paths);
   if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
@@ -65,7 +70,6 @@ runHook(() => {
   }
   if (state('reviewed') === diffHash) return pass();
 
-  const { config } = loadConfig(root);
   const summary = input.last_assistant_message ?? '';
   const findings = checkDocs(buildDocsContext(root, diff, summary)).filter(
     (finding) => !config.disable.includes(finding.id),

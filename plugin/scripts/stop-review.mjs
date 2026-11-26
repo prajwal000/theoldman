@@ -291,6 +291,40 @@ function runHook(handler, io = process) {
   writeOutput(output, io);
 }
 
+// src/lib/paths.ts
+function normalizePath(path) {
+  return path.replaceAll("\\", "/").replace(/^\/([A-Za-z])(?=\/|$)/, "$1:").replace(/^([A-Za-z]):/, (drive) => drive.toLowerCase()).replace(/^\.\//, "");
+}
+function toProjectRelative(filePath2, projectDir) {
+  const file = normalizePath(filePath2);
+  const root = normalizePath(projectDir).replace(/\/+$/, "");
+  const fold = /^[a-z]:/.test(root) ? (p) => p.toLowerCase() : (p) => p;
+  return fold(file).startsWith(`${fold(root)}/`) ? file.slice(root.length + 1) : file;
+}
+function globToRegExp(glob) {
+  const pattern = normalizePath(glob);
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern.charAt(i);
+    if (char === "*" && pattern.charAt(i + 1) === "*") {
+      const slash = pattern.charAt(i + 2) === "/";
+      source += slash ? "(?:.*/)?" : ".*";
+      i += slash ? 2 : 1;
+    } else if (char === "*") {
+      source += "[^/]*";
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+function isIgnored(filePath2, projectDir, patterns) {
+  const relative = toProjectRelative(filePath2, projectDir);
+  return patterns.some((pattern) => globToRegExp(pattern).test(relative));
+}
+
 // src/lib/session-changes.ts
 import { statSync } from "node:fs";
 import { join as join4 } from "node:path";
@@ -657,7 +691,10 @@ runHook(() => {
   const session = input.session_id;
   const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
   if (isPaused(root)) return pass();
-  const paths = sessionChanges(root, session);
+  const { config } = loadConfig(root);
+  const paths = sessionChanges(root, session).filter(
+    (path) => path !== CONFIG_FILE && !isIgnored(path, root, config.ignorePaths)
+  );
   if (paths.length === 0) return pass();
   const diff = sessionDiff(root, paths);
   if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
@@ -672,7 +709,6 @@ runHook(() => {
     return pass();
   }
   if (state("reviewed") === diffHash) return pass();
-  const { config } = loadConfig(root);
   const summary = input.last_assistant_message ?? "";
   const findings = checkDocs(buildDocsContext(root, diff, summary)).filter(
     (finding) => !config.disable.includes(finding.id)
