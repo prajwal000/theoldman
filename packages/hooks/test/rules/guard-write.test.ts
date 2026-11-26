@@ -18,8 +18,26 @@ describe('checkAgentPath', () => {
     expect(checkAgentPath('/home/me/proj/src/a.ts', '/home/me/proj', DOCS_WRITER)).toEqual({
       id: 'OLDMAN-G07',
       message:
-        '/home/me/proj/src/a.ts is not a documentation file. The docs writer may only change README and CHANGELOG files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.',
+        '/home/me/proj/src/a.ts is not a documentation file. The docs writer may only change README and CHANGELOG files, root CONTRIBUTING, SECURITY, CODE_OF_CONDUCT and SUPPORT files, Markdown under docs/, .env.example and OpenAPI files. Describe the code change in your reply instead of making it.',
     });
+  });
+
+  it('blocks agent instruction and config files with the prompt-injection reason', () => {
+    for (const path of ['docs/CLAUDE.md', '.claude/settings.json', '.github/README.md']) {
+      expect(checkAgentPath(path, '/home/me/proj', DOCS_WRITER)).toEqual({
+        id: 'OLDMAN-G07',
+        message: `${path} holds agent instructions or config. The docs writer may not change it, because an edit there could persist a prompt injection. Describe the change in your reply instead.`,
+      });
+    }
+    expect(checkAgentPath('C:\\Repo\\Claude.MD', 'C:\\Repo', DOCS_WRITER)?.message).toMatch(
+      /holds agent instructions/,
+    );
+  });
+
+  it('allows the community files only at the project root', () => {
+    expect(isDocPath('CONTRIBUTING.md', '/home/me/proj')).toBe(true);
+    expect(isDocPath('packages/a/CONTRIBUTING.md', '/home/me/proj')).toBe(false);
+    expect(isDocPath('docs/CONTRIBUTING.md', '/home/me/proj')).toBe(true);
   });
 
   it('takes a relative path from cwd and quotes it as given', () => {

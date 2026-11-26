@@ -14,3 +14,9 @@ apps/web/.env.example
 openapi.yaml
 docs/api/openapi.json
 swagger.v2.yml
+CONTRIBUTING.md
+SECURITY.md
+CODE_OF_CONDUCT.md
+SUPPORT.md
+contributing.MD
+/home/me/proj/SECURITY.md
