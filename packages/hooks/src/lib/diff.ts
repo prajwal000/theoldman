@@ -52,17 +52,21 @@ export function newFileDiff(cwd: string, path: string): string {
 /**
  * The changes in `cwd` against HEAD, staged or not, as a unified diff with paths relative to
  * `cwd`. Untracked files that are not ignored are included as new files. In a repository
- * with no commits yet, staged files count as new. Throws outside a git repository.
+ * with no commits yet, staged files count as new. With `paths`, only those files or folders
+ * (relative to `cwd`, matched literally) are included. Throws outside a git repository.
  */
-export function workingTreeDiff(cwd: string): string {
+export function workingTreeDiff(cwd: string, paths?: readonly string[]): string {
+  if (paths?.length === 0) return '';
+  // `:(literal)` keeps a name such as `*.ts` from being read as a pattern.
+  const pathspecs = ['--', ...(paths ?? []).map((path) => `:(literal)${path}`)];
   let tracked: string;
   try {
-    tracked = runGit(cwd, [...DIFF_ARGS, 'HEAD', '--']);
+    tracked = runGit(cwd, [...DIFF_ARGS, 'HEAD', ...pathspecs]);
   } catch {
     // No HEAD yet: compare the index with the empty tree instead.
-    tracked = runGit(cwd, [...DIFF_ARGS, '--cached', '--']);
+    tracked = runGit(cwd, [...DIFF_ARGS, '--cached', ...pathspecs]);
   }
-  const untracked = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])
+  const untracked = runGit(cwd, ['ls-files', '--others', '--exclude-standard', '-z', ...pathspecs])
     .split('\0')
     .filter((path) => path !== '');
   return tracked + untracked.map((path) => newFileDiff(cwd, path)).join('');

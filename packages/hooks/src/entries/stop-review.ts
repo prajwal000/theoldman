@@ -1,0 +1,99 @@
+// Stop hook: when this session changed code, asks Claude once to have the diff reviewed by
+// theoldman's reviewer and verifier subagents and to fix what they confirm, and runs the docs
+// rules (rules/docs.ts) on the same diff. It never makes Claude loop: it stays quiet while
+// Claude is already continuing because a Stop hook blocked (stop_hook_active), asks at most
+// maxFeedbackRounds times per session, and does not ask again about a diff it already handled.
+// Warnings never go in additionalContext, which on Stop forces another turn: they go in the
+// block reason, or to the user only as a systemMessage.
+
+import { createHash } from 'node:crypto';
+import { loadConfig } from '../lib/config.js';
+import { newFileDiff, parseDiff, workingTreeDiff } from '../lib/diff.js';
+import { isRecord, isStopHookInput, readHookInput } from '../lib/input.js';
+import { failOpen, fix, formatFindings, notify, pass, runHook } from '../lib/output.js';
+import { sessionChanges } from '../lib/session-changes.js';
+import {
+  addRound,
+  cappedFindings,
+  getRounds,
+  isPaused,
+  readSessionJson,
+  writeSessionFile,
+  writeSessionJson,
+} from '../lib/state.js';
+import { blockReason, userNotice } from '../lib/stop-report.js';
+import { buildDocsContext } from '../rules/docs-context.js';
+import { checkDocs } from '../rules/docs.js';
+
+const DOC_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc)$|(?:^|\/)(?:license|changelog)[^/]*$/i;
+// The hashes of the last diff the hook handled and the last notice it showed.
+const REVIEW_STATE = 'review.json';
+
+const hash = (text: string): string => createHash('sha256').update(text).digest('hex');
+
+function sessionDiff(projectDir: string, paths: readonly string[]): string {
+  try {
+    return workingTreeDiff(projectDir, paths);
+  } catch {
+    // Not a git repository: show each changed file as new.
+    return paths.map((path) => newFileDiff(projectDir, path)).join('');
+  }
+}
+
+runHook(() => {
+  const input = readHookInput(isStopHookInput);
+  if (input === undefined) return failOpen('invalid hook input');
+  const session = input.session_id;
+  // Claude Code exports CLAUDE_PROJECT_DIR to every hook; cwd can be a subdirectory of it.
+  const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  if (isPaused(root)) return pass();
+  const paths = sessionChanges(root, session);
+  if (paths.length === 0) return pass();
+  const diff = sessionDiff(root, paths);
+  if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
+
+  const stored = readSessionJson(root, session, REVIEW_STATE);
+  const state = (key: string): unknown => (isRecord(stored) ? stored[key] : undefined);
+  const save = (reviewed: string, notified = state('notified')): void => {
+    writeSessionJson(root, session, REVIEW_STATE, { reviewed, notified });
+  };
+  const diffHash = hash(diff);
+  if (input.stop_hook_active) {
+    // Claude is finishing what a Stop hook asked for; the result counts as handled.
+    if (state('reviewed') !== undefined) save(diffHash);
+    return pass();
+  }
+  if (state('reviewed') === diffHash) return pass();
+
+  const { config } = loadConfig(root);
+  const summary = input.last_assistant_message ?? '';
+  const findings = checkDocs(buildDocsContext(root, diff, summary)).filter(
+    (finding) => !config.disable.includes(finding.id),
+  );
+  const fixes = findings.filter((finding) => finding.action === 'fix');
+  const notes = findings.filter((finding) => finding.action !== 'fix');
+  const capped = Object.values(cappedFindings(root, session)).flat();
+  const max = config.maxFeedbackRounds;
+  const wantsReview = config.level !== 'quick' && config.review.onStop;
+  const review = wantsReview && getRounds(root, session, 'review') < max;
+  const docsFix = fixes.length > 0 && getRounds(root, session, 'docs') < max;
+
+  if (review || docsFix) {
+    const diffPath = review ? writeSessionFile(root, session, 'diff.patch', diff) : undefined;
+    if (review) addRound(root, session, 'review');
+    if (docsFix) addRound(root, session, 'docs');
+    save(diffHash);
+    const left = docsFix ? capped : [...capped, ...formatFindings(fixes).split('\n')];
+    return fix('Stop', blockReason({ diffPath, fixes: docsFix ? fixes : [], capped: left, notes }));
+  }
+  const skipped = wantsReview
+    ? `this session already had ${String(max)} reviews (maxFeedbackRounds)`
+    : undefined;
+  const notice = userNotice({ fixes, capped, notes }, skipped);
+  if (notice === undefined || state('notified') === hash(notice)) {
+    save(diffHash);
+    return pass();
+  }
+  save(diffHash, hash(notice));
+  return notify(notice);
+});

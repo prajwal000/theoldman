@@ -7,6 +7,7 @@ import {
   isEditToolInput,
   isPromptHookInput,
   isShellToolInput,
+  isStopHookInput,
   isToolHookInput,
   isWriteToolInput,
   parseJson,
@@ -83,6 +84,15 @@ describe('event input guards', () => {
     expect(isPromptHookInput({ ...common, prompt: 'fix the login bug' })).toBe(true);
     expect(isPromptHookInput({ ...common, prompt: ['x'] })).toBe(false);
     expect(isPromptHookInput(start)).toBe(false);
+  });
+
+  it('accept Stop input only with a boolean stop_hook_active', () => {
+    const stop = { ...common, hook_event_name: 'Stop', stop_hook_active: false };
+    expect(isStopHookInput(stop)).toBe(true);
+    expect(isStopHookInput({ ...stop, last_assistant_message: 'Done.' })).toBe(true);
+    expect(isStopHookInput({ ...stop, last_assistant_message: 1 })).toBe(false);
+    expect(isStopHookInput({ ...stop, stop_hook_active: 'false' })).toBe(false);
+    expect(isStopHookInput(common)).toBe(false);
   });
 });
 

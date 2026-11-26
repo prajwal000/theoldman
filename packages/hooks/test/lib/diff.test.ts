@@ -112,6 +112,24 @@ describe('workingTreeDiff', () => {
     expect(existsSync(join(repo, 'tc-ran'))).toBe(false);
   });
 
+  it('limits the diff to the given paths, matched literally', () => {
+    const repo = repoWith({ 'a.ts': 'a\n', 'b.ts': 'b\n', '[x].ts': 'x\n' });
+    write(repo, {
+      'a.ts': 'a2\n',
+      'b.ts': 'b2\n',
+      '[x].ts': 'x2\n',
+      'dir/new.ts': 'n\n',
+      'x.ts': 'y\n',
+    });
+    const paths = (list: string[]): string[] =>
+      parseDiff(workingTreeDiff(repo, list))
+        .map((file) => file.path)
+        .sort();
+    expect(paths(['a.ts', 'dir'])).toEqual(['a.ts', 'dir/new.ts']);
+    expect(paths(['[x].ts'])).toEqual(['[x].ts']);
+    expect(workingTreeDiff(repo, [])).toBe('');
+  });
+
   it('throws outside a git repository', () => {
     expect(() => workingTreeDiff(dir)).toThrow();
   });

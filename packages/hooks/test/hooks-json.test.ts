@@ -46,6 +46,7 @@ describe('plugin/hooks/hooks.json', () => {
       ['PreToolUse', 'Bash|PowerShell', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-bash.mjs'],
       ['PreToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/guard-write.mjs'],
       ['PostToolUse', 'Write|Edit', '${CLAUDE_PLUGIN_ROOT}/scripts/check-file.mjs'],
+      ['Stop', undefined, '${CLAUDE_PLUGIN_ROOT}/scripts/stop-review.mjs'],
     ]);
   });
 

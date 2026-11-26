@@ -85,21 +85,30 @@ const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string');
 
 /** A JSON file in the session's state directory; missing or corrupt reads as undefined. */
-function readSessionJson(projectDir: string, sessionId: string, name: string): unknown {
+export function readSessionJson(projectDir: string, sessionId: string, name: string): unknown {
   const file = join(stateDir(projectDir), sessionSegment(sessionId), name);
   return existsSync(file) ? parseJson(readFileSync(file, 'utf8')) : undefined;
 }
 
-function writeSessionJson(
+/** Writes `name` in the session's state directory and returns its absolute path. */
+export function writeSessionFile(
+  projectDir: string,
+  sessionId: string,
+  name: string,
+  text: string,
+) {
+  const file = join(ensureStateDir(projectDir, sessionSegment(sessionId)), name);
+  writeFileSync(file, text);
+  return file;
+}
+
+export function writeSessionJson(
   projectDir: string,
   sessionId: string,
   name: string,
   value: unknown,
-): void {
-  writeFileSync(
-    join(ensureStateDir(projectDir, sessionSegment(sessionId)), name),
-    JSON.stringify(value),
-  );
+) {
+  writeSessionFile(projectDir, sessionId, name, JSON.stringify(value));
 }
 
 /** Files written or edited in this session, project-relative, for the Stop hook. */

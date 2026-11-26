@@ -130,9 +130,110 @@ function runHook(handler, io = process) {
   writeOutput(output, io);
 }
 
-// src/lib/stack.ts
-import { readFileSync as readFileSync3 } from "node:fs";
+// src/lib/session-changes.ts
+import { statSync } from "node:fs";
+import { join as join3 } from "node:path";
+
+// src/lib/git.ts
+import { execFileSync } from "node:child_process";
+var NETWORK_SUBCOMMANDS = /* @__PURE__ */ new Set(["fetch", "pull", "push", "clone", "ls-remote", "remote"]);
+var SAFE_OPTIONS = ["--no-pager", "-c", "core.fsmonitor=false", "-c", "protocol.allow=never"];
+var SAFE_ENV = { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" };
+function runGit(cwd, args) {
+  const [subcommand = ""] = args;
+  if (NETWORK_SUBCOMMANDS.has(subcommand)) {
+    throw new Error(`git ${subcommand} reaches the network and is not allowed`);
+  }
+  return execFileSync("git", [...SAFE_OPTIONS, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, ...SAFE_ENV },
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2e3,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true
+  });
+}
+
+// src/lib/state.ts
+import { existsSync, lstatSync, mkdirSync, readFileSync as readFileSync3, rmSync, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
+var PAUSED_FILE = "paused";
+var SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+function stateDir(projectDir) {
+  return join2(projectDir, ".theoldman", "state");
+}
+function sessionSegment(sessionId) {
+  if (!SESSION_ID.test(sessionId)) throw new Error("invalid session id");
+  return sessionId;
+}
+function ensureStateDir(projectDir, ...segments) {
+  let dir = projectDir;
+  for (const segment of [".theoldman", "state", ...segments]) {
+    dir = join2(dir, segment);
+    if (!existsSync(dir)) {
+      mkdirSync(dir);
+      if (segment === ".theoldman") writeFileSync(join2(dir, ".gitignore"), "*\n");
+    }
+    if (lstatSync(dir).isSymbolicLink()) {
+      throw new Error(`${segment} is a symbolic link; refusing to write state through it`);
+    }
+  }
+  return dir;
+}
+function isPaused(projectDir) {
+  return existsSync(join2(stateDir(projectDir), PAUSED_FILE));
+}
+function readSessionJson(projectDir, sessionId, name) {
+  const file = join2(stateDir(projectDir), sessionSegment(sessionId), name);
+  return existsSync(file) ? parseJson(readFileSync3(file, "utf8")) : void 0;
+}
+function writeSessionFile(projectDir, sessionId, name, text) {
+  const file = join2(ensureStateDir(projectDir, sessionSegment(sessionId)), name);
+  writeFileSync(file, text);
+  return file;
+}
+function writeSessionJson(projectDir, sessionId, name, value) {
+  writeSessionFile(projectDir, sessionId, name, JSON.stringify(value));
+}
+
+// src/lib/session-changes.ts
+var BASELINE_FILE = "baseline.json";
+var MAX_DIRTY_FILES = 5e3;
+function fingerprint(file) {
+  try {
+    const stats = statSync(file);
+    return `${String(stats.size)}:${String(stats.mtimeMs)}`;
+  } catch {
+    return "missing";
+  }
+}
+function dirtyFiles(projectDir, limit = MAX_DIRTY_FILES) {
+  let listed;
+  try {
+    listed = runGit(projectDir, [
+      "ls-files",
+      "--modified",
+      "--deleted",
+      "--others",
+      "--exclude-standard",
+      "-z"
+    ]);
+  } catch {
+    return void 0;
+  }
+  const paths = [...new Set(listed.split("\0").filter((path) => path !== ""))];
+  if (paths.length > limit) return void 0;
+  return Object.fromEntries(paths.map((path) => [path, fingerprint(join3(projectDir, path))]));
+}
+function recordBaseline(projectDir, sessionId) {
+  if (readSessionJson(projectDir, sessionId, BASELINE_FILE) !== void 0) return;
+  writeSessionJson(projectDir, sessionId, BASELINE_FILE, dirtyFiles(projectDir) ?? null);
+}
+
+// src/lib/stack.ts
+import { readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
 var MARKERS = [
   ["typescript", ["typescript"]],
   ["nextjs", ["next"]],
@@ -151,7 +252,7 @@ var DEPENDENCY_FIELDS = [
 function detectStack(projectDir) {
   let raw;
   try {
-    raw = readFileSync3(join2(projectDir, "package.json"), "utf8");
+    raw = readFileSync4(join4(projectDir, "package.json"), "utf8");
   } catch {
     return [];
   }
@@ -168,25 +269,14 @@ function detectStack(projectDir) {
   );
 }
 
-// src/lib/state.ts
-import { existsSync, lstatSync, mkdirSync, readFileSync as readFileSync4, rmSync, writeFileSync } from "node:fs";
-import { join as join3 } from "node:path";
-var PAUSED_FILE = "paused";
-function stateDir(projectDir) {
-  return join3(projectDir, ".theoldman", "state");
-}
-function isPaused(projectDir) {
-  return existsSync(join3(stateDir(projectDir), PAUSED_FILE));
-}
-
 // src/lib/tell.ts
 import { readFileSync as readFileSync5 } from "node:fs";
-import { join as join4 } from "node:path";
-var TELL_FILE = join4("skills", "oldman-rules", "tell.md");
+import { join as join5 } from "node:path";
+var TELL_FILE = join5("skills", "oldman-rules", "tell.md");
 function readTellSections(pluginRoot) {
   const sections = /* @__PURE__ */ new Map();
   let current;
-  for (const line of readFileSync5(join4(pluginRoot, TELL_FILE), "utf8").split(/\r?\n/)) {
+  for (const line of readFileSync5(join5(pluginRoot, TELL_FILE), "utf8").split(/\r?\n/)) {
     const name = /^## (\S.*)$/.exec(line)?.[1];
     if (name !== void 0) {
       current = [];
@@ -211,6 +301,10 @@ runHook(() => {
   const input = readHookInput(isCommonInput);
   if (input === void 0) return failOpen("invalid hook input");
   const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  try {
+    recordBaseline(root, input.session_id);
+  } catch {
+  }
   const { config, warning } = loadConfig(root);
   const notes = warning === void 0 ? [] : [`theoldman: ${warning}`];
   if (isPaused(root)) return warn("SessionStart", [...notes, PAUSED].join("\n"));
