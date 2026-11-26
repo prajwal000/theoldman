@@ -178,15 +178,18 @@ describe('parseDiff', () => {
           { line: 2, text: '++ b/not-a-header' },
           { line: 3, text: '--- a/not-either' },
         ],
+        removedLines: 1,
       },
-      { path: 'tab.ts', status: 'deleted', addedLines: [] },
+      { path: 'tab.ts', status: 'deleted', addedLines: [], removedLines: 1 },
     ]);
   });
 
   it('names a binary file from its diff header, and ignores text before the first file', () => {
     const diff =
       'warning: x\ndiff --git a/my logo.png b/my logo.png\nnew file mode 100644\nBinary files /dev/null and b/my logo.png differ\n';
-    expect(parseDiff(diff)).toEqual([{ path: 'my logo.png', status: 'added', addedLines: [] }]);
+    expect(parseDiff(diff)).toEqual([
+      { path: 'my logo.png', status: 'added', addedLines: [], removedLines: 0 },
+    ]);
     expect(parseDiff('')).toEqual([]);
   });
 

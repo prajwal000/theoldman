@@ -1,3 +1,6 @@
+// src/entries/oldman-review-diff.ts
+import { fileURLToPath } from "node:url";
+
 // src/lib/diff.ts
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -153,7 +156,7 @@ function parseDiff(diff) {
     if (line.startsWith("diff --git ")) {
       const rest = line.slice("diff --git ".length);
       const path = unquote(rest.slice(0, (rest.length - 1) / 2)).slice(2);
-      current = { path, status: "modified", addedLines: [] };
+      current = { path, status: "modified", addedLines: [], removedLines: 0 };
       files.push(current);
       inHunk = false;
     } else if (current === void 0) {
@@ -164,6 +167,7 @@ function parseDiff(diff) {
     } else if (inHunk) {
       if (line.startsWith("+")) current.addedLines.push({ line: next, text: line.slice(1) });
       if (line.startsWith("+") || line.startsWith(" ")) next += 1;
+      if (line.startsWith("-")) current.removedLines += 1;
     } else if (line.startsWith("new file mode")) {
       current.status = "added";
     } else if (line.startsWith("deleted file mode")) {
@@ -201,10 +205,72 @@ function runHook(handler, io = process) {
   writeOutput(output, io);
 }
 
+// src/lib/review-scope.ts
+import { readFileSync as readFileSync3 } from "node:fs";
+import { join as join3 } from "node:path";
+
+// src/lib/router.ts
+var KEYWORDS = [
+  [
+    "auth",
+    /\b(auth\w*|log ?ins?|log ?outs?|logged (in|out)|sign ?(ins?|ups?|outs?)|passwords?|sessions?|jwts?|oauth|sso|tokens?|permissions?|roles?|rbac|admins?|cookies?|csrf|2fa|mfa)\b/g
+  ],
+  [
+    "db",
+    /\b(databases?|db|sql|postgres\w*|mysql|sqlite|mongo\w*|prisma|drizzle|orm|migrations?|migrate|schemas?|tables?|columns?|index(es)?|indices|quer(y|ies)|seeds?|transactions?|n\+1|backfill)\b/g
+  ],
+  [
+    "api",
+    /\b(apis?|endpoints?|routes?|rest|graphql|grpc|controllers?|handlers?|webhooks?|express|fastify|middleware|requests?|responses?|post|get|put|patch|status codes?|rate limit\w*)\b/g
+  ],
+  [
+    "infra",
+    /\b(docker\w*|compose|containers?|deploy\w*|ci|pipelines?|kubernetes|k8s|helm|terraform|nginx|aws|s3|gcp|azure|vercel|github actions|workflows?|env vars?|environment variables?|servers?|dns|cdn|monitoring)\b/g
+  ],
+  [
+    "tests",
+    /\b(tests?|testing|tested|specs?|vitest|jest|mocha|playwright|cypress|coverage|mocks?|mocking|stubs?|fixtures?|e2e|tdd|assertions?|flaky)\b/g
+  ],
+  [
+    "git",
+    /\b(git|commits?|branch(es)?|merge[sd]?|rebase[sd]?|prs?|pull requests?|push|cherry-pick|stash|squash|conflicts?)\b/g
+  ],
+  [
+    "docs",
+    /\b(readme|docs?|documentation|document|changelog|adrs?|jsdoc|tsdoc|comments?|env\.example)\b/g
+  ],
+  [
+    "ui",
+    /\b(ui|ux|components?|buttons?|pages?|css|styles?|styling|tailwind|layouts?|react|jsx|tsx|modals?|forms?|frontend|a11y|accessibility|responsive|mobile|dark mode|navbar|sidebar|animations?)\b/g
+  ]
+];
+var MAX_PROMPT_CHARS = 1e4;
+function classify(prompt) {
+  const text = prompt.slice(0, MAX_PROMPT_CHARS).toLowerCase();
+  return KEYWORDS.map(([category, pattern]) => ({
+    category,
+    count: text.match(pattern)?.length ?? 0
+  })).filter(({ count }) => count > 0).sort((a, b) => b.count - a.count).map(({ category }) => category);
+}
+
 // src/lib/state.ts
 import { existsSync, lstatSync, mkdirSync, readFileSync as readFileSync2, rmSync, writeFileSync } from "node:fs";
 import { join as join2 } from "node:path";
+
+// src/lib/input.ts
+function parseJson(raw) {
+  try {
+    return JSON.parse(raw.replace(/^\uFEFF/, ""));
+  } catch {
+    return void 0;
+  }
+}
+
+// src/lib/state.ts
 var SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+function stateDir(projectDir) {
+  return join2(projectDir, ".theoldman", "state");
+}
 function sessionSegment(sessionId) {
   if (!SESSION_ID.test(sessionId)) throw new Error("invalid session id");
   return sessionId;
@@ -223,10 +289,65 @@ function ensureStateDir(projectDir, ...segments) {
   }
   return dir;
 }
+function readSessionJson(projectDir, sessionId, name) {
+  const file = join2(stateDir(projectDir), sessionSegment(sessionId), name);
+  return existsSync(file) ? parseJson(readFileSync2(file, "utf8")) : void 0;
+}
 function writeSessionFile(projectDir, sessionId, name, text) {
   const file = join2(ensureStateDir(projectDir, sessionSegment(sessionId)), name);
   writeFileSync(file, text);
   return file;
+}
+
+// src/lib/review-scope.ts
+var CATEGORIES_FILE = "categories.json";
+var CATEGORY_NAMES = [
+  "auth",
+  "db",
+  "api",
+  "infra",
+  "tests",
+  "git",
+  "docs",
+  "ui"
+];
+var SKILL_FOR = {
+  auth: "oldman-security",
+  api: "oldman-security",
+  infra: "oldman-security",
+  db: "oldman-database",
+  tests: "oldman-testing",
+  docs: "oldman-docs",
+  git: void 0,
+  ui: void 0
+};
+var isCategory = (value) => typeof value === "string" && CATEGORY_NAMES.includes(value);
+function sessionCategories(projectDir, sessionId) {
+  const value = readSessionJson(projectDir, sessionId, CATEGORIES_FILE);
+  return Array.isArray(value) ? value.filter(isCategory) : [];
+}
+function reviewSkills(paths, categories) {
+  const fromPaths = classify(paths.join(" ").replace(/[/\\._-]+/g, " "));
+  const skills = [...fromPaths, ...categories].map((category) => SKILL_FOR[category]);
+  return [...new Set(skills.filter((skill) => skill !== void 0))].sort();
+}
+function writeReviewRules(pluginRoot, projectDir, sessionId, skills) {
+  const bodies = skills.flatMap((skill) => {
+    try {
+      const text = readFileSync3(join3(pluginRoot, "skills", skill, "SKILL.md"), "utf8");
+      return [text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim()];
+    } catch {
+      return [];
+    }
+  });
+  if (bodies.length === 0) return void 0;
+  return writeSessionFile(
+    projectDir,
+    sessionId,
+    "review-rules.md",
+    `${bodies.join("\n\n---\n\n")}
+`
+  );
 }
 
 // src/entries/oldman-review-diff.ts
@@ -243,5 +364,11 @@ runHook(() => {
   const files = parseDiff(diff).length;
   if (files === 0) return say(`No changes against ${against}, so there is nothing to review.`);
   const path = writeSessionFile(projectDir, sessionId, "diff.patch", diff);
-  return say(`Diff of ${String(files)} changed file(s) against ${against} written to ${path}`);
+  const changed = parseDiff(diff).map((file) => file.path);
+  const skills = reviewSkills(changed, sessionCategories(projectDir, sessionId));
+  const pluginRoot = fileURLToPath(new URL("..", import.meta.url));
+  const rules = writeReviewRules(pluginRoot, projectDir, sessionId, skills);
+  const summary = `Diff of ${String(files)} changed file(s) against ${against} written to ${path}`;
+  return say(rules === void 0 ? summary : `${summary}
+Topic rules for this change: ${rules}`);
 });

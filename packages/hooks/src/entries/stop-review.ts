@@ -1,17 +1,26 @@
-// Stop hook: when this session changed code, asks Claude once to have the diff reviewed by
-// theoldman's reviewer and verifier subagents and to fix what they confirm, and runs the docs
-// rules (rules/docs.ts) on the same diff. It never makes Claude loop: it stays quiet while
+// Stop hook: when this session changed code, asks Claude once to have the diff reviewed and to fix
+// what the review confirms, and runs the docs rules (rules/docs.ts) on the same diff. How much
+// review depends on the change (lib/review-scope.ts): none for docs or tests only, a light
+// self-review for a small change, the reviewer and verifier subagents with the matching topic
+// rules otherwise. It never makes Claude loop: it stays quiet while
 // Claude is already continuing because a Stop hook blocked (stop_hook_active), asks at most
 // maxFeedbackRounds times per session, and does not ask again about a diff it already handled.
 // Warnings never go in additionalContext, which on Stop forces another turn: they go in the
 // block reason, or to the user only as a systemMessage.
 
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { CONFIG_FILE, loadConfig } from '../lib/config.js';
 import { newFileDiff, parseDiff, workingTreeDiff } from '../lib/diff.js';
 import { isRecord, isStopHookInput, readHookInput } from '../lib/input.js';
 import { failOpen, fix, formatFindings, notify, pass, runHook } from '../lib/output.js';
 import { isIgnored } from '../lib/paths.js';
+import {
+  reviewKind,
+  reviewSkills,
+  sessionCategories,
+  writeReviewRules,
+} from '../lib/review-scope.js';
 import { sessionChanges } from '../lib/session-changes.js';
 import {
   addRound,
@@ -26,7 +35,6 @@ import { blockReason, userNotice } from '../lib/stop-report.js';
 import { buildDocsContext } from '../rules/docs-context.js';
 import { checkDocs } from '../rules/docs.js';
 
-const DOC_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc)$|(?:^|\/)(?:license|changelog)[^/]*$/i;
 // The hashes of the last diff the hook handled and the last notice it showed.
 const REVIEW_STATE = 'review.json';
 
@@ -55,7 +63,8 @@ runHook(() => {
   );
   if (paths.length === 0) return pass();
   const diff = sessionDiff(root, paths);
-  if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
+  const kind = reviewKind(parseDiff(diff), config.review.lightMaxLines);
+  if (kind === 'none') return pass();
 
   const stored = readSessionJson(root, session, REVIEW_STATE);
   const state = (key: string): unknown => (isRecord(stored) ? stored[key] : undefined);
@@ -84,12 +93,21 @@ runHook(() => {
 
   if (review || docsFix) {
     const diffPath = review ? writeSessionFile(root, session, 'diff.patch', diff) : undefined;
+    const skills =
+      review && kind === 'full' ? reviewSkills(paths, sessionCategories(root, session)) : [];
+    const rulesPath = writeReviewRules(
+      fileURLToPath(new URL('..', import.meta.url)),
+      root,
+      session,
+      skills,
+    );
     if (review) addRound(root, session, 'review');
     if (docsFix) addRound(root, session, 'docs');
     save(diffHash);
     const leftFixes = docsFix || fixes.length === 0 ? [] : formatFindings(fixes).split('\n');
     const left = [...capped, ...leftFixes];
-    return fix('Stop', blockReason({ diffPath, fixes: docsFix ? fixes : [], capped: left, notes }));
+    const report = { kind, diffPath, rulesPath, fixes: docsFix ? fixes : [], capped: left, notes };
+    return fix('Stop', blockReason(report));
   }
   const skipped = wantsReview
     ? `this session already had ${String(max)} reviews (maxFeedbackRounds)`

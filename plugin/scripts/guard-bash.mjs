@@ -59,7 +59,7 @@ var DEFAULT_CONFIG = {
   stack: [],
   disable: [],
   ignorePaths: ["**/generated/**", "**/*.lock", "**/vendor/**"],
-  review: { maxNits: 5, onStop: true, docsWriterModel: "sonnet" },
+  review: { maxNits: 5, onStop: true, docsWriterModel: "sonnet", lightMaxLines: 40 },
   maxFeedbackRounds: 2
 };
 var LEVELS = ["quick", "standard", "strict"];
@@ -82,14 +82,18 @@ function parseReview(value) {
   const {
     maxNits = DEFAULT_CONFIG.review.maxNits,
     onStop = DEFAULT_CONFIG.review.onStop,
-    docsWriterModel = DEFAULT_CONFIG.review.docsWriterModel
+    docsWriterModel = DEFAULT_CONFIG.review.docsWriterModel,
+    lightMaxLines = DEFAULT_CONFIG.review.lightMaxLines
   } = value;
   if (!isCount(maxNits)) return '"review.maxNits" must be a whole number of 0 or more';
   if (typeof onStop !== "boolean") return '"review.onStop" must be true or false';
   if (typeof docsWriterModel !== "string" || docsWriterModel === "") {
     return '"review.docsWriterModel" must be a non-empty string';
   }
-  return { maxNits, onStop, docsWriterModel };
+  if (!isCount(lightMaxLines)) {
+    return '"review.lightMaxLines" must be a whole number of 0 or more';
+  }
+  return { maxNits, onStop, docsWriterModel, lightMaxLines };
 }
 function parseConfig(value) {
   if (!isRecord(value)) return "must be a JSON object";

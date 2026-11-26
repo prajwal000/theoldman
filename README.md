@@ -55,7 +55,13 @@ After each Write or Edit, theoldman checks the lines Claude added for change-nar
 
 ## Review before Claude finishes
 
-When Claude stops after changing code, theoldman writes the session's diff to `.theoldman/state/<session>/diff.patch` and asks Claude once to have it reviewed. The `oldman-reviewer` subagent reports findings, the `oldman-verifier` subagent keeps only the ones it can confirm in the code, and Claude fixes the confirmed Critical and Important ones. Both subagents can only read files. The same step checks the diff for variables missing from `.env.example`, and notes route, dependency and setup changes that have no matching docs.
+When Claude stops after changing code, theoldman writes the session's diff to `.theoldman/state/<session>/diff.patch` and asks Claude once to have it reviewed. How much review depends on the change:
+
+- **Docs or tests only:** no review. The exception is a test change that removes lines or skips tests, which gets a light review.
+- **Small code change:** a light review. Claude re-reads the diff itself against a short checklist, with no subagents. "Small" means at most `review.lightMaxLines` added and removed lines (default 40; `0` turns light reviews off).
+- **Larger change:** the `oldman-reviewer` subagent reports findings. If it finds any, the `oldman-verifier` subagent keeps only the ones it can confirm in the code. Claude then fixes the confirmed Critical and Important ones.
+
+Both subagents can only read files, and they get only the topic rules (security, database, testing, docs) that fit the changed files and your prompts. The same step checks the diff for variables missing from `.env.example`, and notes route, dependency and setup changes that have no matching docs.
 
 Only this session's changes count, including edits made through Bash; uncommitted work from before the session, `.theoldman.json` and paths in `ignorePaths` are left out. theoldman asks at most `maxFeedbackRounds` times per session and never twice for the same diff. Set `"review": { "onStop": false }` or `"level": "quick"` in `.theoldman.json` to turn the review off. Claude Code shows each review request as a "stop hook problem" notification; that is its label for a Stop hook asking Claude to continue, not an error.
 

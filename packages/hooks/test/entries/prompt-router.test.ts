@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildHooks } from '../../build.mjs';
+import { sessionCategories } from '../../src/lib/review-scope.js';
 import { setPaused } from '../../src/lib/state.js';
 
 const root = mkdtempSync(join(tmpdir(), 'theoldman-prompt-router-'));
@@ -63,6 +64,14 @@ describe('prompt-router hook', () => {
     expect(lines.slice(1)).toHaveLength(4);
     expect(lines[1]).toMatch(/^- Validate the body/);
     expect(lines[2]).toMatch(/^- Migrations are backward compatible/);
+  });
+
+  it('records every category it found for the session, for the Stop review', () => {
+    const dir = join(root, 'categories');
+    mkdirSync(dir);
+    runRouter('Add a POST endpoint that saves the order to the database, with tests', dir);
+    runRouter('Thanks', dir);
+    expect(sessionCategories(dir, 's1').sort()).toEqual(['api', 'db', 'tests']);
   });
 
   it('uses up to four lines of a single category', () => {

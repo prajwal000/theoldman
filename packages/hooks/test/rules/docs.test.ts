@@ -107,7 +107,7 @@ describe('docs findings', () => {
     expect(d02(badCase('OLDMAN-D02', 'route-changed'))[0]).toMatchObject({
       action: 'warn',
       message:
-        'API route files changed (app/api/orders/route.ts, src/routes/users.ts) but no OpenAPI or route docs did. Check whether the API docs need an update.',
+        'API route files changed (app/api/orders/route.ts, src/routes/users.ts) but no OpenAPI or route docs did, and the README does not mention them. Check whether the API docs need an update.',
     });
     expect(d03(badCase('OLDMAN-D03', 'new-dependencies'))[0]).toMatchObject({
       action: 'warn',
@@ -131,6 +131,7 @@ describe('docs findings', () => {
       path: `src/routes/${name}.ts`,
       status: 'modified' as const,
       addedLines: [],
+      removedLines: 0,
     }));
     const context = {
       files,
