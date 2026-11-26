@@ -1,8 +1,6 @@
-// Finds the comments in JavaScript and TypeScript source with one pass of a small scanner, not a
-// parser: it skips strings, template literals (with nested `${}`) and regex literals, so `//`
-// inside them is not a comment. Whether `/` starts a regex or divides is decided from the token
-// before it, which is right in common code; the cases it gets wrong are listed as `it.todo` in
-// comments.known-gaps.test.ts.
+// Finds comments in JS and TS with a one-pass scanner, not a parser: it skips strings, template
+// literals (with nested `${}`) and regex literals, telling a regex from a division by the token
+// before the `/`. Cases it gets wrong are `it.todo` in comments.known-gaps.test.ts.
 
 import { skipRegex, skipString } from './js-tokens.js';
 
@@ -15,6 +13,8 @@ export interface SourceComment {
   readonly endLine: number;
   /** The comment without `//`, `/*`, `*\/` or leading `*`, trimmed; lines joined with `\n`. */
   readonly text: string;
+  /** The same cleaned text per source line: `lines[i]` is on line `line + i`. */
+  readonly lines: readonly string[];
   readonly kind: CommentKind;
   /** Code comes before it on the same line, as in `count++; // retry`. */
   readonly trailing: boolean;
@@ -28,24 +28,24 @@ const KEYWORDS_BEFORE_REGEX = new Set(
   'return typeof case do else in of new delete void throw yield await instanceof'.split(' '),
 );
 
+// In JSX text, `https://example.com` is not a comment: `//` right after a URL scheme is text.
+const URL_SCHEME_BEFORE = /[A-Za-z][\w+.-]*:$/;
+
 export function supportsComments(file: string): boolean {
   return SUPPORTED.test(file);
 }
 
-function blockText(body: string): string {
-  return body
-    .split(/\r?\n/)
-    .map((line) =>
-      line
-        .trim()
-        .replace(/^\*\s?/, '')
-        .trim(),
-    )
-    .join('\n')
-    .trim();
-}
+const blockLines = (body: string): string[] =>
+  body.split(/\r?\n/).map((line) =>
+    line
+      .trim()
+      .replace(/^\*\s?/, '')
+      .trim(),
+  );
 
-export function extractComments(source: string): SourceComment[] {
+/** Comments in `source`; pass `file` so `.jsx` / `.tsx` get the JSX URL rule above. */
+export function extractComments(source: string, file = ''): SourceComment[] {
+  const jsx = /\.[jt]sx$/i.test(file);
   const comments: SourceComment[] = [];
   const length = source.length;
   let line = 1;
@@ -73,11 +73,12 @@ export function extractComments(source: string): SourceComment[] {
     return length;
   };
 
-  const comment = (start: number, kind: CommentKind, end: number, text: string): void => {
-    const lines = source.slice(start, end).split('\n').length - 1;
-    comments.push({ line, endLine: line + lines, text, kind, trailing: lineHasCode });
-    line += lines;
-    if (lines > 0) lineHasCode = false;
+  const comment = (start: number, kind: CommentKind, end: number, lines: string[]): void => {
+    const extra = source.slice(start, end).split('\n').length - 1;
+    const text = lines.join('\n').trim();
+    comments.push({ line, endLine: line + extra, text, lines, kind, trailing: lineHasCode });
+    line += extra;
+    if (extra > 0) lineHasCode = false;
   };
 
   /** Scans code from `start`; inside `${...}` it stops after the `}` that closes it. */
@@ -91,16 +92,24 @@ export function extractComments(source: string): SourceComment[] {
         line++;
         lineHasCode = false;
         i++;
+      } else if (
+        char === '/' &&
+        next === '/' &&
+        jsx &&
+        URL_SCHEME_BEFORE.test(source.slice(Math.max(0, i - 32), i))
+      ) {
+        markCode('/');
+        i += 2;
       } else if (char === '/' && next === '/') {
         const end = source.indexOf('\n', i) === -1 ? length : source.indexOf('\n', i);
-        comment(i, 'line', end, source.slice(i + 2, end).trim());
+        comment(i, 'line', end, [source.slice(i + 2, end).trim()]);
         i = end;
       } else if (char === '/' && next === '*') {
         const close = source.indexOf('*/', i + 2);
         const end = close === -1 ? length : close + 2;
         const jsdoc = source[i + 2] === '*' && source[i + 3] !== '/';
         const body = source.slice(i + (jsdoc ? 3 : 2), close === -1 ? length : close);
-        comment(i, jsdoc ? 'jsdoc' : 'block', end, blockText(body));
+        comment(i, jsdoc ? 'jsdoc' : 'block', end, blockLines(body));
         i = end;
       } else if (char === '"' || char === "'") {
         i = skipString(source, i);
