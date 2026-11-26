@@ -3,7 +3,8 @@
 //
 // OLDMAN-C01 change narration (`// Added retry logic`, `// Updated to use v2`), which belongs in
 // the commit message. A past-tense verb only counts when an edit-like word follows it, so
-// `// Fixed-size buffer` and `// Updated every hour by cron` describe the code and pass.
+// `// Fixed-size buffer` and `// Updated every hour by cron` describe the code and pass. A
+// comment of four words or fewer that opens with an edit verb (`// Fixed bug`) also counts.
 // OLDMAN-C04 a TODO, FIXME or HACK with no `(#123)`, `(name)` or link.
 // OLDMAN-C05 banner and divider comments: four or more `=`, `-`, `*`, `#` or `/` in a row.
 // As the SPEC says, a comment with a URL or an issue reference is neither narration nor a bare TODO.
@@ -59,6 +60,13 @@ const NARRATION: readonly RegExp[] = [
   /^(?:was|old):/i,
 ];
 
+// A short comment that opens with an edit verb is a change note even without a telling word:
+// `// Fixed bug`, `// Updated logic`, `// New function`. The verb must be a whole word, so
+// `// Fixed-size buffer` and `// Now() is UTC here` are not caught.
+const SHORT_NARRATION = /^(?:added|updated|fixed|changed|removed|refactored|new|now)(?=[\s:]|$)/i;
+const isShortNarration = (text: string): boolean =>
+  SHORT_NARRATION.test(text) && text.split(/\s+/).length <= 4;
+
 const MARKER = /\b(?:TODO|FIXME|HACK)\b(\([^)\s]+\))?/;
 const DIVIDER = /([=\-*#/])\1{3,}/;
 
@@ -72,7 +80,9 @@ function commentRule(id: Finding['id'], message: string, matches: (text: string)
 export const c01 = commentRule(
   'OLDMAN-C01',
   'Move change notes to the commit message; a comment should say why the code is as it is.',
-  (text) => !REFERENCE.test(text) && NARRATION.some((pattern) => pattern.test(text)),
+  (text) =>
+    !REFERENCE.test(text) &&
+    (NARRATION.some((pattern) => pattern.test(text)) || isShortNarration(text)),
 );
 
 export const c04 = commentRule(
