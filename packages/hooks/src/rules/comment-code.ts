@@ -11,14 +11,20 @@
 
 import { extractComments, type SourceComment, supportsComments } from '../lib/comments.js';
 import type { Finding, Rule, RuleInput } from '../lib/rules.js';
-import { REFERENCE } from './comments.js';
+import { isAllowedComment, nextCodeLine, REFERENCE } from './comment-allow.js';
 
-/** Comments of a JS or TS file that start on, or reach into, a line the edit added. */
-function addedComments(input: RuleInput): SourceComment[] {
+/**
+ * Comments of a JS or TS file that start on, or reach into, a line the edit added, minus the
+ * allow-listed ones (comment-allow.ts).
+ */
+export function addedComments(input: RuleInput): SourceComment[] {
   if (!supportsComments(input.file)) return [];
   const added = new Set(input.addedLines.map(({ line }) => line));
-  return extractComments(input.content, input.file).filter((comment) =>
-    comment.lines.some((_, i) => added.has(comment.line + i)),
+  const lines = input.content.split(/\r?\n/);
+  return extractComments(input.content, input.file).filter(
+    (comment) =>
+      comment.lines.some((_, i) => added.has(comment.line + i)) &&
+      !isAllowedComment(comment, lines),
   );
 }
 
@@ -65,14 +71,6 @@ function codeWords(code: string): Set<string> {
     if (pattern.test(code)) for (const word of synonyms.split(' ')) found.add(word);
   }
   return found;
-}
-
-/** The first line after `afterLine` that holds code, not blank space or a comment. */
-function nextCodeLine(lines: readonly string[], afterLine: number): string | undefined {
-  return lines.slice(afterLine).find((line) => {
-    const trimmed = line.trim();
-    return trimmed !== '' && !/^(?:\/\/|\/\*|\*)/.test(trimmed);
-  });
 }
 
 function restates(comment: SourceComment, lines: readonly string[]): boolean {
