@@ -291,13 +291,15 @@ function readQuoted(text, start, dialect) {
 function finish(words) {
   const assignments = [];
   const kept = [];
+  const redirects = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? { text: "", quoted: false };
     const redirect = word.quoted ? null : REDIRECT.exec(word.text);
     if (redirect === null) {
       kept.push(word.text);
-    } else if (redirect[1] === void 0 && redirect[2] === "") {
-      i++;
+    } else if (redirect[1] === void 0) {
+      const target = redirect[2] === "" ? words[++i]?.text : redirect[2];
+      if (target !== void 0) redirects.push(target);
     }
   }
   let start = 0;
@@ -313,7 +315,7 @@ function finish(words) {
       break;
     }
   }
-  return { assignments, words: kept.slice(start) };
+  return { assignments, words: kept.slice(start), redirects };
 }
 function parseCommands(input, dialect) {
   const text = input.replaceAll("\r\n", "\n");
@@ -559,7 +561,7 @@ function expandCommands(text, dialect, context) {
     units.push({ text: line, dialect: lineDialect, commands, variables });
     let cwd = startCwd;
     const stack = [];
-    for (const { assignments, words: raw } of parseCommands(line, lineDialect)) {
+    for (const { assignments, words: raw, redirects } of parseCommands(line, lineDialect)) {
       const exported = raw[0] === "export" ? raw.slice(1) : [];
       for (const piece of [...assignments, ...exported]) setVariable(variables, piece);
       if (/^\$env:/i.test(raw[0] ?? "")) setVariable(variables, raw.join(""));
@@ -595,7 +597,7 @@ function expandCommands(text, dialect, context) {
       if (nested !== void 0 && depth < MAX_NESTING) {
         visit(nested.text, nested.dialect, cwd, variables, depth + 1, scriptDepth);
       }
-      commands.push({ words, cwd });
+      commands.push({ words, cwd, redirects });
     }
   };
   visit(text, dialect, context.cwd, /* @__PURE__ */ new Map(), 0, 0);
@@ -684,6 +686,93 @@ function commitSkipsHooks(args) {
     }
   }
   return false;
+}
+
+// src/rules/guard-pause.ts
+var PAUSE_SCRIPT = "oldman-pause.mjs";
+var FLAG_FILE = /(?:^|\/)\.theoldman\/state\/paused$/i;
+var RUNTIMES = /* @__PURE__ */ new Set(["node", "bun", "deno"]);
+var pauseViolation = {
+  id: "OLDMAN-G08",
+  message: "pausing or resuming theoldman is the user's decision. Ask the user to run /theoldman:off or /theoldman:on themselves."
+};
+function isPauseFlag(path) {
+  return FLAG_FILE.test(normalizePath(path));
+}
+function pauseCommandViolation(words, redirects) {
+  const command = words[0] === "&" ? words.slice(1) : words;
+  const runtime = command.findIndex((word) => RUNTIMES.has(programName(word)));
+  const script = command.findIndex((word) => programName(word) === PAUSE_SCRIPT);
+  const runsScript = script === 0 || runtime !== -1 && script > runtime;
+  const touchesFlag = [...command, ...redirects].some(isPauseFlag);
+  return runsScript || touchesFlag ? pauseViolation : void 0;
+}
+
+// src/rules/guard-config.ts
+var PROTECTED = [
+  /(?:^|\/)\.theoldman\.json$/i,
+  /(?:^|\/)\.theoldman(?:\/|$)/i,
+  /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/i,
+  /(?:^|\/)managed-settings\.json$/i,
+  /(?:^|\/)\.claude\/plugins(?:\/|$)/i
+];
+var WRITERS = /* @__PURE__ */ new Set([
+  "rm",
+  "rmdir",
+  "unlink",
+  "mv",
+  "touch",
+  "truncate",
+  "tee",
+  "ln",
+  "chmod",
+  "chown",
+  "mkdir",
+  "remove-item",
+  "ri",
+  "del",
+  "erase",
+  "rd",
+  "move-item",
+  "mi",
+  "move",
+  "rename-item",
+  "rni",
+  "ren",
+  "new-item",
+  "ni",
+  "set-content",
+  "sc",
+  "add-content",
+  "ac",
+  "out-file",
+  "clear-content",
+  "clc"
+]);
+var COPIERS = /* @__PURE__ */ new Set(["cp", "install", "copy-item", "cpi", "copy"]);
+var GIT_WRITERS = /* @__PURE__ */ new Set(["rm", "mv", "restore", "checkout"]);
+var configViolation = {
+  id: "OLDMAN-G09",
+  message: "theoldman's settings and Claude Code's settings are the user's to change. Tell the user what to change and why, and let them edit the file or run /theoldman:init."
+};
+function isProtectedConfig(path) {
+  const normalized = normalizePath(path);
+  return !isPauseFlag(normalized) && PROTECTED.some((pattern) => pattern.test(normalized));
+}
+function writtenFiles(words) {
+  const [first = "", ...rest] = words;
+  const program = programName(first);
+  if (WRITERS.has(program)) return rest;
+  if (COPIERS.has(program)) return rest.slice(-1);
+  if (program === "sed" || program === "perl")
+    return rest.some((w) => /^-\w*i/.test(w)) ? rest : [];
+  if (program === "git" && GIT_WRITERS.has(rest[0] ?? "")) return rest.slice(1);
+  return [];
+}
+function configCommandViolation(words, redirects) {
+  const command = words[0] === "&" ? words.slice(1) : words;
+  const targets = [...writtenFiles(command), ...redirects];
+  return targets.some(isProtectedConfig) ? configViolation : void 0;
 }
 
 // src/rules/guard-db.ts
@@ -899,9 +988,11 @@ function checkCommand(text, dialect, context) {
   const found = /* @__PURE__ */ new Map();
   for (const unit of expandCommands(text, dialect, context)) {
     const violations = [
-      ...unit.commands.flatMap(({ words, cwd }) => [
+      ...unit.commands.flatMap(({ words, cwd, redirects }) => [
         ...gitViolations(words, context),
-        removalViolation(words, unit.dialect, cwd, context)
+        removalViolation(words, unit.dialect, cwd, context),
+        pauseCommandViolation(words, redirects),
+        configCommandViolation(words, redirects)
       ]),
       databaseViolation(unit, context)
     ];

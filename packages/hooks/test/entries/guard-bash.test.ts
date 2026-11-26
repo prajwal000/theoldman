@@ -70,6 +70,26 @@ describe('guard-bash hook', () => {
     );
   });
 
+  it('keeps guarding while theoldman is paused, and blocks the model from resuming it', () => {
+    const paused = join(root, 'paused-project');
+    mkdirSync(join(paused, '.theoldman', 'state'), { recursive: true });
+    writeFileSync(join(paused, '.theoldman', 'state', 'paused'), '');
+    const env = { CLAUDE_PROJECT_DIR: paused };
+    expect(denyReason(runGuard(hookInput('Bash', 'git push -f origin main', paused), env))).toMatch(
+      /^OLDMAN-G01: /,
+    );
+    const resume = hookInput('PowerShell', 'Remove-Item .theoldman\\state\\paused', paused);
+    expect(denyReason(runGuard(resume, env))).toMatch(/^OLDMAN-G08: /);
+  });
+
+  it('blocks writing theoldman or Claude Code settings from either shell, but allows reading them', () => {
+    const quick = hookInput('Bash', `echo '{"level":"quick"}' > .theoldman.json`);
+    expect(denyReason(runGuard(quick))).toMatch(/^OLDMAN-G09: /);
+    const hooksOff = hookInput('PowerShell', "'{}' | Out-File .claude\\settings.local.json");
+    expect(denyReason(runGuard(hooksOff))).toMatch(/^OLDMAN-G09: /);
+    expect(runGuard(hookInput('Bash', 'cat .theoldman.json')).stdout).toBe('');
+  });
+
   it('denies a force-push to main from the PowerShell tool', () => {
     const run = runGuard(hookInput('PowerShell', '$env:FOO=1; git push -f origin main'));
     expect(denyReason(run)).toContain('OLDMAN-G01');

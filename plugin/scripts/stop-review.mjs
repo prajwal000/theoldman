@@ -186,13 +186,14 @@ new file mode 100644
 @@ -0,0 +1,${String(lines.length)} @@
 ${body}`;
 }
-function workingTreeDiff(cwd, paths) {
+function workingTreeDiff(cwd, paths, base = "HEAD") {
   if (paths?.length === 0) return "";
   const pathspecs = ["--", ...(paths ?? []).map((path) => `:(literal)${path}`)];
   let tracked;
   try {
-    tracked = runGit(cwd, [...DIFF_ARGS, "HEAD", ...pathspecs]);
-  } catch {
+    tracked = runGit(cwd, [...DIFF_ARGS, base, ...pathspecs]);
+  } catch (error) {
+    if (base !== "HEAD") throw error;
     tracked = runGit(cwd, [...DIFF_ARGS, "--cached", ...pathspecs]);
   }
   const untracked = runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z", ...pathspecs]).split("\0").filter((path) => path !== "");
@@ -288,6 +289,40 @@ function runHook(handler, io = process) {
     output = failOpen(`internal error: ${error instanceof Error ? error.message : String(error)}`);
   }
   writeOutput(output, io);
+}
+
+// src/lib/paths.ts
+function normalizePath(path) {
+  return path.replaceAll("\\", "/").replace(/^\/([A-Za-z])(?=\/|$)/, "$1:").replace(/^([A-Za-z]):/, (drive) => drive.toLowerCase()).replace(/^\.\//, "");
+}
+function toProjectRelative(filePath2, projectDir) {
+  const file = normalizePath(filePath2);
+  const root = normalizePath(projectDir).replace(/\/+$/, "");
+  const fold = /^[a-z]:/.test(root) ? (p) => p.toLowerCase() : (p) => p;
+  return fold(file).startsWith(`${fold(root)}/`) ? file.slice(root.length + 1) : file;
+}
+function globToRegExp(glob) {
+  const pattern = normalizePath(glob);
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern.charAt(i);
+    if (char === "*" && pattern.charAt(i + 1) === "*") {
+      const slash = pattern.charAt(i + 2) === "/";
+      source += slash ? "(?:.*/)?" : ".*";
+      i += slash ? 2 : 1;
+    } else if (char === "*") {
+      source += "[^/]*";
+    } else if (char === "?") {
+      source += "[^/]";
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${source}$`);
+}
+function isIgnored(filePath2, projectDir, patterns) {
+  const relative = toProjectRelative(filePath2, projectDir);
+  return patterns.some((pattern) => globToRegExp(pattern).test(relative));
 }
 
 // src/lib/session-changes.ts
@@ -656,7 +691,10 @@ runHook(() => {
   const session = input.session_id;
   const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
   if (isPaused(root)) return pass();
-  const paths = sessionChanges(root, session);
+  const { config } = loadConfig(root);
+  const paths = sessionChanges(root, session).filter(
+    (path) => path !== CONFIG_FILE && !isIgnored(path, root, config.ignorePaths)
+  );
   if (paths.length === 0) return pass();
   const diff = sessionDiff(root, paths);
   if (parseDiff(diff).every((file) => DOC_FILE.test(file.path))) return pass();
@@ -671,7 +709,6 @@ runHook(() => {
     return pass();
   }
   if (state("reviewed") === diffHash) return pass();
-  const { config } = loadConfig(root);
   const summary = input.last_assistant_message ?? "";
   const findings = checkDocs(buildDocsContext(root, diff, summary)).filter(
     (finding) => !config.disable.includes(finding.id)

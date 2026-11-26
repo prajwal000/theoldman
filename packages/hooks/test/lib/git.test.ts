@@ -3,7 +3,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { currentBranch, defaultBranch, readHeadVersion, runGit } from '../../src/lib/git.js';
+import {
+  branchBase,
+  currentBranch,
+  defaultBranch,
+  readHeadVersion,
+  runGit,
+} from '../../src/lib/git.js';
 
 let dir: string;
 beforeEach(() => {
@@ -126,6 +132,33 @@ describe('currentBranch', () => {
     gitIn(repo, 'checkout', '-q', '--detach');
     expect(currentBranch(repo)).toBeUndefined();
     expect(currentBranch(dir)).toBeUndefined();
+  });
+});
+
+describe('branchBase', () => {
+  it('finds where the branch left main, or the remote default branch first', () => {
+    const repo = initRepo();
+    gitIn(repo, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    commit(repo, { 'a.ts': 'a\n' });
+    const mainTip = gitIn(repo, 'rev-parse', 'HEAD').trim();
+    gitIn(repo, 'checkout', '-q', '-b', 'feature');
+    commit(repo, { 'b.ts': 'b\n' });
+    expect(branchBase(repo)).toEqual({ commit: mainTip, branch: 'main' });
+    gitIn(repo, 'update-ref', 'refs/remotes/origin/develop', 'HEAD');
+    gitIn(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+    expect(branchBase(repo)?.branch).toBe('origin/develop');
+  });
+
+  it('skips a branch with unrelated history, and gives up without commits or candidates', () => {
+    const repo = initRepo();
+    gitIn(repo, 'symbolic-ref', 'HEAD', 'refs/heads/trunk');
+    expect(branchBase(repo)).toBeUndefined();
+    commit(repo, { 'a.ts': 'a\n' });
+    expect(branchBase(repo)).toBeUndefined();
+    gitIn(repo, 'checkout', '-q', '--orphan', 'main');
+    commit(repo, { 'z.ts': 'z\n' });
+    gitIn(repo, 'checkout', '-q', 'trunk');
+    expect(branchBase(repo)).toBeUndefined();
   });
 });
 

@@ -83,6 +83,31 @@ describe('checkPath', () => {
     );
   });
 
+  it('blocks writing the paused flag (OLDMAN-G08), in any path form', () => {
+    for (const path of ['.theoldman/state/paused', 'C:\\Proj\\.theoldman\\state\\PAUSED']) {
+      expect(checkPath(path)?.id).toBe('OLDMAN-G08');
+    }
+    // Only the flag itself is G08; any other file under .theoldman/ is G09.
+    expect(checkPath('.theoldman/state/paused.json')?.id).toBe('OLDMAN-G09');
+  });
+
+  it('blocks writing theoldman and Claude Code settings (OLDMAN-G09), in any path form', () => {
+    for (const path of [
+      '.theoldman.json',
+      'C:\\Proj\\.theoldman.json',
+      '.theoldman/state/s1/rounds.json',
+      '/home/me/proj/.claude/settings.json',
+      '~/.claude/settings.local.json',
+      'C:\\ProgramData\\ClaudeCode\\managed-settings.json',
+      'C:\\Users\\me\\.claude\\plugins\\cache\\theoldman\\hooks\\hooks.json',
+    ]) {
+      expect(checkPath(path)?.id, path).toBe('OLDMAN-G09');
+    }
+    for (const path of ['theoldman.json', '.claude/agents/x.md', 'src/.theoldman.json.md']) {
+      expect(checkPath(path), path).toBeUndefined();
+    }
+  });
+
   it('allows ordinary files and an empty path', () => {
     expect(checkPath('src/index.ts')).toBeUndefined();
     expect(checkPath('')).toBeUndefined();

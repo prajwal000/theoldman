@@ -57,18 +57,22 @@ export interface SimpleCommand {
   /** Leading `NAME=value` words, as in `DATABASE_URL=... npx prisma migrate reset`. */
   readonly assignments: readonly string[];
   readonly words: readonly string[];
+  /** Files the command redirects to or from, such as `out.txt` in `echo x > out.txt`. */
+  readonly redirects: readonly string[];
 }
 
 function finish(words: readonly Word[]): SimpleCommand {
   const assignments: string[] = [];
   const kept: string[] = [];
+  const redirects: string[] = [];
   for (let i = 0; i < words.length; i++) {
     const word = words[i] ?? { text: '', quoted: false };
     const redirect = word.quoted ? null : REDIRECT.exec(word.text);
     if (redirect === null) {
       kept.push(word.text);
-    } else if (redirect[1] === undefined && redirect[2] === '') {
-      i++;
+    } else if (redirect[1] === undefined) {
+      const target = redirect[2] === '' ? words[++i]?.text : redirect[2];
+      if (target !== undefined) redirects.push(target);
     }
   }
   let start = 0;
@@ -84,7 +88,7 @@ function finish(words: readonly Word[]): SimpleCommand {
       break;
     }
   }
-  return { assignments, words: kept.slice(start) };
+  return { assignments, words: kept.slice(start), redirects };
 }
 
 /** Like {@link parseCommands}, but only the words of commands that run a program. */

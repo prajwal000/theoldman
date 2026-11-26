@@ -4,6 +4,37 @@ import { runRuleOnFixtures } from '../harness.js';
 import { fakeContext } from './fake-context.js';
 import { FAKE_SECRETS, fillFakes } from './fake-secrets.js';
 
+runRuleOnFixtures('OLDMAN-G08', guardBashRule(fakeContext().context));
+runRuleOnFixtures('OLDMAN-G09', guardBashRule(fakeContext().context));
+
+describe('OLDMAN-G09 settings files', () => {
+  it('tells the model to leave the change to the user, and leaves the paused flag to G08', () => {
+    const check = (line: string) => checkCommand(line, 'bash', fakeContext().context);
+    expect(check('rm .theoldman.json')).toEqual([
+      {
+        id: 'OLDMAN-G09',
+        message:
+          "theoldman's settings and Claude Code's settings are the user's to change. Tell the user what to change and why, and let them edit the file or run /theoldman:init.",
+      },
+    ]);
+    expect(check('rm .theoldman/state/paused').map((v) => v.id)).toEqual(['OLDMAN-G08']);
+  });
+});
+
+describe('OLDMAN-G08 pause script and flag', () => {
+  it('tells the model to ask the user', () => {
+    expect(
+      checkCommand('node scripts/oldman-pause.mjs off', 'bash', fakeContext().context),
+    ).toEqual([
+      {
+        id: 'OLDMAN-G08',
+        message:
+          "pausing or resuming theoldman is the user's decision. Ask the user to run /theoldman:off or /theoldman:on themselves.",
+      },
+    ]);
+  });
+});
+
 describe('OLDMAN-S01 secrets in commands', () => {
   const check = (line: string, dialect: 'bash' | 'powershell' = 'bash') =>
     checkCommand(fillFakes(line), dialect, fakeContext().context);

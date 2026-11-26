@@ -203,6 +203,33 @@ function isStrictlyInside(path, root) {
   return full.startsWith(`${fold(base)}/`) && full.length > base.length + 1;
 }
 
+// src/rules/guard-pause.ts
+var FLAG_FILE = /(?:^|\/)\.theoldman\/state\/paused$/i;
+var pauseViolation = {
+  id: "OLDMAN-G08",
+  message: "pausing or resuming theoldman is the user's decision. Ask the user to run /theoldman:off or /theoldman:on themselves."
+};
+function isPauseFlag(path) {
+  return FLAG_FILE.test(normalizePath(path));
+}
+
+// src/rules/guard-config.ts
+var PROTECTED = [
+  /(?:^|\/)\.theoldman\.json$/i,
+  /(?:^|\/)\.theoldman(?:\/|$)/i,
+  /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/i,
+  /(?:^|\/)managed-settings\.json$/i,
+  /(?:^|\/)\.claude\/plugins(?:\/|$)/i
+];
+var configViolation = {
+  id: "OLDMAN-G09",
+  message: "theoldman's settings and Claude Code's settings are the user's to change. Tell the user what to change and why, and let them edit the file or run /theoldman:init."
+};
+function isProtectedConfig(path) {
+  const normalized = normalizePath(path);
+  return !isPauseFlag(normalized) && PROTECTED.some((pattern) => pattern.test(normalized));
+}
+
 // src/rules/guard-write.ts
 var SSH_KEY = /^id_(?:rsa|dsa|ecdsa|ed25519)/;
 var KEY_EXTENSION = /\.(?:pem|key)$/;
@@ -215,6 +242,8 @@ function fileName(path) {
   return (normalizePath(path).split("/").pop() ?? "").toLowerCase();
 }
 function checkPath(path) {
+  if (isPauseFlag(path)) return pauseViolation;
+  if (isProtectedConfig(path)) return configViolation;
   const name = fileName(path);
   if (name === ".env" || name.startsWith(".env.") && name !== ".env.example") {
     return {
