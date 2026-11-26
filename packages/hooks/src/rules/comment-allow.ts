@@ -32,9 +32,17 @@ export function nextCodeLine(
     );
 }
 
-export function isAllowedComment(comment: SourceComment, lines: readonly string[]): boolean {
+/**
+ * Whether no comment rule should flag `comment`. Pass `references: false` to leave URLs and issue
+ * references out, for a rule that checks them line by line instead.
+ */
+export function isAllowedComment(
+  comment: SourceComment,
+  lines: readonly string[],
+  { references = true } = {},
+): boolean {
   const { text } = comment;
-  if (REFERENCE.test(text) || LICENSE.test(text)) return true;
+  if ((references && REFERENCE.test(text)) || LICENSE.test(text)) return true;
   if (DIRECTIVE_WITH_REASON.test(text) || TRIPLE_SLASH.test(text)) return true;
   if (comment.kind !== 'jsdoc') return false;
   return EXPORT.test(nextCodeLine(lines, comment.endLine, true) ?? '');

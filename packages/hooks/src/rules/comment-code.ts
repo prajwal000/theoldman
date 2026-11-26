@@ -6,8 +6,9 @@
 // (`++` increment, `=` set, `new` create). Long comments, comments that give a reason
 // ("because", "so that", ...), references, JSDoc and trailing comments are left alone.
 // OLDMAN-C03 (Fix): commented-out code, such as `// const x = 1;` or `// if (a) {`. Prose that
-// ends with a period, comments with a URL and JSDoc (where `@example` code belongs) pass. A run
-// of commented-out lines is reported once, at its first line.
+// ends with a period and JSDoc (where `@example` code belongs) pass. A URL or `#123` exempts only
+// its own line, so a link at the top of a block comment does not hide code below it. A run of
+// commented-out lines is reported once, at its first line.
 
 import { extractComments, type SourceComment, supportsComments } from '../lib/comments.js';
 import type { Finding, Rule, RuleInput } from '../lib/rules.js';
@@ -15,16 +16,17 @@ import { isAllowedComment, nextCodeLine, REFERENCE } from './comment-allow.js';
 
 /**
  * Comments of a JS or TS file that start on, or reach into, a line the edit added, minus the
- * allow-listed ones (comment-allow.ts).
+ * allow-listed ones (comment-allow.ts). `references: false` keeps comments that are allowed only
+ * because of a URL or issue reference, for a rule that checks those line by line.
  */
-export function addedComments(input: RuleInput): SourceComment[] {
+export function addedComments(input: RuleInput, { references = true } = {}): SourceComment[] {
   if (!supportsComments(input.file)) return [];
   const added = new Set(input.addedLines.map(({ line }) => line));
   const lines = input.content.split(/\r?\n/);
   return extractComments(input.content, input.file).filter(
     (comment) =>
       comment.lines.some((_, i) => added.has(comment.line + i)) &&
-      !isAllowedComment(comment, lines),
+      !isAllowedComment(comment, lines, { references }),
   );
 }
 
@@ -118,7 +120,8 @@ export const c02: Rule = (input) => {
 
 export const c03: Rule = (input) => {
   const added = new Set(input.addedLines.map(({ line }) => line));
-  const codeLines = addedComments(input)
+  // looksLikeCode skips a line with a URL or `#123`, so the exemption applies per line here.
+  const codeLines = addedComments(input, { references: false })
     .filter((comment) => comment.kind !== 'jsdoc')
     .flatMap((comment) => comment.lines.map((text, i) => ({ line: comment.line + i, text })))
     .filter(({ line, text }) => added.has(line) && looksLikeCode(text))

@@ -69,6 +69,14 @@ describe('isAllowedComment', () => {
     expect(allowed(source)).toBe(false);
   });
 
+  it('can leave URLs and issue references out, keeping the other reasons', () => {
+    const [link] = extractComments('// see https://example.com', 'a.ts');
+    const [license] = extractComments('// Copyright 2026 Example Ltd. https://example.com', 'a.ts');
+    if (link === undefined || license === undefined) throw new Error('no comment');
+    expect(isAllowedComment(link, [], { references: false })).toBe(false);
+    expect(isAllowedComment(license, [], { references: false })).toBe(true);
+  });
+
   it('never sees a shebang, which is not a comment', () => {
     expect(extractComments('#!/usr/bin/env node\nrun();', 'cli.ts')).toEqual([]);
   });
