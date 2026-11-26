@@ -39,7 +39,12 @@ export function block(reason: string): HookOutput {
   });
 }
 
-/** Asks Claude to fix something after an edit (PostToolUse) or before it stops (Stop). */
+/**
+ * Asks Claude to fix something after an edit (PostToolUse) or before it stops (Stop). Only
+ * PostToolUse takes warnings as context: on Stop, additionalContext forces another turn.
+ */
+export function fix(event: 'PostToolUse' | 'Stop', reason: string): HookOutput;
+export function fix(event: 'PostToolUse', reason: string, context?: string): HookOutput;
 export function fix(event: 'PostToolUse' | 'Stop', reason: string, context?: string): HookOutput {
   return json({
     decision: 'block',
@@ -56,6 +61,11 @@ export function fix(event: 'PostToolUse' | 'Stop', reason: string, context?: str
  */
 export function warn(event: Exclude<HookEvent, 'Stop'>, context: string): HookOutput {
   return json({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
+}
+
+/** Shows a message to the user only. On Stop it does not make Claude take another turn. */
+export function notify(message: string): HookOutput {
+  return json({ systemMessage: message });
 }
 
 export function failOpen(message: string): HookOutput {

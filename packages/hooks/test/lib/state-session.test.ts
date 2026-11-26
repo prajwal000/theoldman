@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   cappedFindings,
+  readSessionJson,
   recordCappedFindings,
   recordTouchedFile,
   stateDir,
   touchedFiles,
+  writeSessionFile,
+  writeSessionJson,
 } from '../../src/lib/state.js';
 
 let project: string;
@@ -45,6 +48,17 @@ describe('touched files', () => {
     expect(() => {
       recordTouchedFile(project, '../x', 'a.ts');
     }).toThrow('invalid session id');
+  });
+});
+
+describe('session files', () => {
+  it('write text and JSON in the session directory and read JSON back', () => {
+    const file = writeSessionFile(project, 's1', 'diff.patch', 'diff --git a/x b/x\n');
+    expect(file).toBe(join(stateDir(project), 's1', 'diff.patch'));
+    expect(readFileSync(file, 'utf8')).toBe('diff --git a/x b/x\n');
+    writeSessionJson(project, 's1', 'review.json', { reviewed: 'abc' });
+    expect(readSessionJson(project, 's1', 'review.json')).toEqual({ reviewed: 'abc' });
+    expect(readSessionJson(project, 's1', 'missing.json')).toBeUndefined();
   });
 });
 

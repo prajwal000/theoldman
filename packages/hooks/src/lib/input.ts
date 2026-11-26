@@ -29,6 +29,13 @@ export interface PromptHookInput extends CommonInput {
   readonly prompt: string;
 }
 
+export interface StopHookInput extends CommonInput {
+  /** True when Claude is already continuing because a Stop hook blocked. */
+  readonly stop_hook_active: boolean;
+  /** Claude's final message of the turn. */
+  readonly last_assistant_message?: string;
+}
+
 export type ToolHookInput = CommonInput &
   (
     | { readonly tool_name: 'Bash' | 'PowerShell'; readonly tool_input: ShellToolInput }
@@ -72,6 +79,14 @@ export function isCommonInput(value: unknown): value is CommonInput & Record<str
 
 export function isPromptHookInput(value: unknown): value is PromptHookInput {
   return isCommonInput(value) && typeof value.prompt === 'string';
+}
+
+export function isStopHookInput(value: unknown): value is StopHookInput {
+  return (
+    isCommonInput(value) &&
+    typeof value.stop_hook_active === 'boolean' &&
+    (value.last_assistant_message === undefined || typeof value.last_assistant_message === 'string')
+  );
 }
 
 export function isToolHookInput(value: unknown): value is ToolHookInput {

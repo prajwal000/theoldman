@@ -39,6 +39,7 @@ Do not report formatting, naming taste, or comment and type problems that theold
 ## Rules for findings
 
 - Every finding names a file and line in the changed code, and a concrete failure: the input or state, and the wrong result it causes. If you cannot describe the failure, do not report it.
+- Line numbers are those of the file after the change, as counted from the `+` side of each hunk header (`@@ -a,b +c,d @@`), never line numbers inside the diff file. Read the file to check when unsure.
 - Severity: `Critical` (data loss, a security hole, or a crash in a common path), `Important` (a bug or missing safeguard a user will hit), `Nit` (a small improvement with a real reason). At most 5 nits; keep the most useful.
 - One finding per problem. Order them Critical first, then Important, then Nit.
 - No praise, no summary of the change, no general advice.

@@ -10,6 +10,7 @@ import {
   formatFindings,
   type HookEvent,
   type HookIo,
+  notify,
   pass,
   runHook,
   warn,
@@ -71,6 +72,20 @@ describe('fix', () => {
       reason: 'Fix this.',
       hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'Also note that.' },
     });
+  });
+
+  it('takes no context on Stop, where additionalContext forces another turn', () => {
+    // @ts-expect-error -- the Stop overload has no context parameter.
+    const output = fix('Stop', 'Fix this.', 'Also note that.');
+    expect(output.stdout).toContain('additionalContext');
+  });
+});
+
+describe('notify', () => {
+  it('sends a systemMessage for the user only', () => {
+    const output = notify('Review skipped.');
+    expect(output.exitCode).toBe(0);
+    expect(JSON.parse(output.stdout)).toEqual({ systemMessage: 'Review skipped.' });
   });
 });
 

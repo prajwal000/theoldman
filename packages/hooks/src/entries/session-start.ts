@@ -1,11 +1,14 @@
 // SessionStart hook: gives Claude the core rules and the project's stack once per session. It also
 // runs after /clear and compaction, so the rules survive a context that was cut down. The rule
-// text is read from the oldman-rules skill (lib/tell.ts), which ships next to this script.
+// text is read from the oldman-rules skill (lib/tell.ts), which ships next to this script. It
+// also records which files already differ from git, so the Stop hook can tell the session's
+// changes from the user's earlier uncommitted work (lib/session-changes.ts).
 
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../lib/config.js';
 import { isCommonInput, readHookInput } from '../lib/input.js';
 import { failOpen, runHook, warn } from '../lib/output.js';
+import { recordBaseline } from '../lib/session-changes.js';
 import { detectStack } from '../lib/stack.js';
 import { isPaused } from '../lib/state.js';
 import { readTellSections } from '../lib/tell.js';
@@ -28,6 +31,12 @@ runHook(() => {
   if (input === undefined) return failOpen('invalid hook input');
   // Claude Code exports CLAUDE_PROJECT_DIR to every hook; cwd can be a subdirectory of it.
   const root = process.env.CLAUDE_PROJECT_DIR ?? input.cwd;
+  try {
+    recordBaseline(root, input.session_id);
+  } catch {
+    // Without a baseline the Stop hook still reviews files Write and Edit touched; the rules
+    // summary matters more than failing here.
+  }
   const { config, warning } = loadConfig(root);
   const notes = warning === undefined ? [] : [`theoldman: ${warning}`];
   if (isPaused(root)) return warn('SessionStart', [...notes, PAUSED].join('\n'));

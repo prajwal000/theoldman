@@ -41,6 +41,12 @@ The full rules are in skills that Claude loads when a task needs them: `oldman-r
 
 After each Write or Edit, theoldman checks the lines Claude added for change-narration comments, commented-out code, TODOs with no issue or owner, banner comments, `any`, `console.log`, empty `catch` blocks and `debugger`. Findings are listed as `OLDMAN-C01 src/a.ts:12 <message>` and Claude is asked to fix them. Some, like comments that repeat the code, are passed on as warnings only. After `maxFeedbackRounds` requests per kind of check (default 2) in a session, theoldman stops asking and records what is left. Session state lives in `.theoldman/`, which contains its own `.gitignore`, so git ignores it without changes to yours. Use `disable` and `ignorePaths` in `.theoldman.json` to turn rules or paths off.
 
+## Review before Claude finishes
+
+When Claude stops after changing code, theoldman writes the session's diff to `.theoldman/state/<session>/diff.patch` and asks Claude once to have it reviewed. The `oldman-reviewer` subagent reports findings, the `oldman-verifier` subagent keeps only the ones it can confirm in the code, and Claude fixes the confirmed Critical and Important ones. Both subagents can only read files. The same step checks the diff for variables missing from `.env.example`, and notes route, dependency and setup changes that have no matching docs.
+
+Only this session's changes count, including edits made through Bash; uncommitted work from before the session is left out. theoldman asks at most `maxFeedbackRounds` times per session and never twice for the same diff. Set `"review": { "onStop": false }` or `"level": "quick"` in `.theoldman.json` to turn the review off. Claude Code shows each review request as a "stop hook problem" notification; that is its label for a Stop hook asking Claude to continue, not an error.
+
 ## What the guard does not catch
 
 The guard reads each command before it runs and blocks the risky ones: force-push or deleting `main`, `--no-verify`, `rm -rf` outside the project, and resets of a database that is not local. It also looks inside `bash -c`, `cmd /c` and `pwsh -Command` (including `-EncodedCommand`), follows `cd` on the same line, and reads the `package.json` scripts that `npm run`, `pnpm` or `yarn` would start.

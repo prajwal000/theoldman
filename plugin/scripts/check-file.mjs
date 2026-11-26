@@ -404,11 +404,13 @@ function readSessionJson(projectDir, sessionId, name) {
   const file = join2(stateDir(projectDir), sessionSegment(sessionId), name);
   return existsSync(file) ? parseJson(readFileSync3(file, "utf8")) : void 0;
 }
+function writeSessionFile(projectDir, sessionId, name, text) {
+  const file = join2(ensureStateDir(projectDir, sessionSegment(sessionId)), name);
+  writeFileSync(file, text);
+  return file;
+}
 function writeSessionJson(projectDir, sessionId, name, value) {
-  writeFileSync(
-    join2(ensureStateDir(projectDir, sessionSegment(sessionId)), name),
-    JSON.stringify(value)
-  );
+  writeSessionFile(projectDir, sessionId, name, JSON.stringify(value));
 }
 function touchedFiles(projectDir, sessionId) {
   const value = readSessionJson(projectDir, sessionId, TOUCHED_FILE);
