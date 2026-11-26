@@ -1,0 +1,10 @@
+# expect: OLDMAN-G06@2, OLDMAN-G06@3, OLDMAN-G06@4, OLDMAN-G06@5, OLDMAN-G06@6, OLDMAN-G06@7, OLDMAN-G06@8, OLDMAN-G06@9, OLDMAN-G06@10
+id_rsa
+C:\Users\me\.ssh\id_rsa
+server.key
+cert.pem
+~/.ssh/id_ed25519
+/home/me/.ssh/id_ecdsa
+keys\Private.PEM
+/c/Users/me/.ssh/id_dsa
+id_rsa.pub
