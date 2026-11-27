@@ -1,0 +1,187 @@
+diff --git a/README.md b/README.md
+index 28ad73e..f9b0ba8 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                             |
++| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                  |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                    |
++| `GET /api/users/me`        | The signed-in user.                                                                                              |
++| `GET /api/products`        | All products, newest first.                                                                                      |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                     |
++| `GET /api/products/:id`    | One product.                                                                                                     |
++| `DELETE /api/products/:id` | Delete a product (admin). It is hidden from the catalogue and can no longer be ordered, but past orders keep it. |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                     |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                        |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127090237_product_soft_delete/migration.sql b/prisma/migrations/20261127090237_product_soft_delete/migration.sql
+new file mode 100644
+index 0000000..832a7dd
+--- /dev/null
++++ b/prisma/migrations/20261127090237_product_soft_delete/migration.sql
+@@ -0,0 +1,8 @@
++-- DropForeignKey
++ALTER TABLE "Order" DROP CONSTRAINT "Order_productId_fkey";
++
++-- AlterTable
++ALTER TABLE "Product" ADD COLUMN     "deletedAt" TIMESTAMP(3);
++
++-- AddForeignKey
++ALTER TABLE "Order" ADD CONSTRAINT "Order_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..b02e8b2 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -42,7 +42,9 @@ model Product {
+   id         String   @id @default(cuid())
+   name       String
+   priceCents Int
+-  createdAt  DateTime @default(now())
++  createdAt  DateTime  @default(now())
++  /// Set when the product is deleted. Deleted products stay for the orders that reference them.
++  deletedAt  DateTime?
+   orders     Order[]
+ }
+ 
+@@ -51,7 +53,7 @@ model Order {
+   userId     String
+   user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+   productId  String
+-  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
++  product    Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+   quantity   Int
+   totalCents Int
+   status     OrderStatus @default(PENDING)
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..6d9f353 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -27,7 +27,7 @@ export async function POST(request: Request): Promise<Response> {
+   ) {
+     return jsonError(400, 'productId and a whole, positive quantity are required');
+   }
+-  const product = await db.product.findUnique({ where: { id: body.productId } });
++  const product = await db.product.findFirst({ where: { id: body.productId, deletedAt: null } });
+   if (product === null) return jsonError(404, 'product not found');
+ 
+   const order = await db.order.create({
+diff --git a/src/app/api/products/[id]/route.ts b/src/app/api/products/[id]/route.ts
+index c357885..acca0e2 100644
+--- a/src/app/api/products/[id]/route.ts
++++ b/src/app/api/products/[id]/route.ts
+@@ -8,18 +8,22 @@ interface Context {
+ 
+ export async function GET(_request: Request, { params }: Context): Promise<Response> {
+   const { id } = await params;
+-  const product = await db.product.findUnique({ where: { id } });
++  const product = await db.product.findFirst({ where: { id, deletedAt: null } });
+   if (product === null) return jsonError(404, 'product not found');
+   return Response.json(product);
+ }
+ 
++// A soft delete: orders keep pointing at the product, so order history stays whole.
+ export async function DELETE(request: Request, { params }: Context): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+   if (user.role !== 'ADMIN') return jsonError(403, 'only admins can delete products');
+ 
+   const { id } = await params;
+-  const { count } = await db.product.deleteMany({ where: { id } });
++  const { count } = await db.product.updateMany({
++    where: { id, deletedAt: null },
++    data: { deletedAt: new Date() },
++  });
+   if (count === 0) return jsonError(404, 'product not found');
+   return new Response(null, { status: 204 });
+ }
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..9ee8054 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -3,7 +3,10 @@ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+ export async function GET(): Promise<Response> {
+-  const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
++  const products = await db.product.findMany({
++    where: { deletedAt: null },
++    orderBy: { createdAt: 'desc' },
++  });
+   return Response.json(products);
+ }
+ 
+diff --git a/test/soft-delete.test.ts b/test/soft-delete.test.ts
+new file mode 100644
+index 0000000..1b5f36b
+--- /dev/null
++++ b/test/soft-delete.test.ts
+@@ -0,0 +1,53 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET as listOrders, POST as order } from '../src/app/api/orders/route';
++import { DELETE } from '../src/app/api/products/[id]/route';
++import { GET as listProducts } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('deleting a product', () => {
++  it('keeps past orders and refuses new ones', async () => {
++    const admin = await createUser('ADMIN');
++    const customer = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await order(
++      jsonRequest('/api/orders', {
++        body: { productId: product.id, quantity: 1 },
++        token: customer.token,
++      }),
++    );
++
++    const deleted = await DELETE(
++      jsonRequest(`/api/products/${product.id}`, { method: 'DELETE', token: admin.token }),
++      params({ id: product.id }),
++    );
++    expect(deleted.status).toBe(204);
++
++    expect(await (await listProducts()).json()).toEqual([]);
++    const orders = (await (
++      await listOrders(jsonRequest('/api/orders', { token: customer.token }))
++    ).json()) as { product: { name: string } }[];
++    expect(orders.map((o) => o.product.name)).toEqual(['Mug']);
++    const again = await order(
++      jsonRequest('/api/orders', {
++        body: { productId: product.id, quantity: 1 },
++        token: customer.token,
++      }),
++    );
++    expect(again.status).toBe(404);
++  });
++
++  it('gives a 404 for a product that is already deleted', async () => {
++    const admin = await createUser('ADMIN');
++    const product = await db.product.create({
++      data: { name: 'Mug', priceCents: 1200, deletedAt: new Date() },
++    });
++    const response = await DELETE(
++      jsonRequest(`/api/products/${product.id}`, { method: 'DELETE', token: admin.token }),
++      params({ id: product.id }),
++    );
++    expect(response.status).toBe(404);
++  });
++});

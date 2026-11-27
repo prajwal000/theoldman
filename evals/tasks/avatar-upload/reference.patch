@@ -1,0 +1,237 @@
+diff --git a/.env.example b/.env.example
+index e347b07..0d91a82 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,2 +1,4 @@
+ # Postgres connection string for Prisma and the app.
+ DATABASE_URL=postgresql://shop:shop@localhost:5432/shop
++# Folder for uploaded files such as profile pictures. Defaults to uploads/ in the project.
++UPLOAD_DIR=./uploads
+diff --git a/README.md b/README.md
+index 28ad73e..efb2ab3 100644
+--- a/README.md
++++ b/README.md
+@@ -18,9 +18,10 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ ## Environment
+ 
+-| Variable       | What                       |
+-| -------------- | -------------------------- |
+-| `DATABASE_URL` | Postgres connection string |
++| Variable       | What                                           |
++| -------------- | ---------------------------------------------- |
++| `DATABASE_URL` | Postgres connection string                     |
++| `UPLOAD_DIR`   | Folder for uploaded files (default `uploads/`) |
+ 
+ ## Tests
+ 
+@@ -30,16 +31,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                       | What                                                                                    |
++| --------------------------- | --------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`     | Create an account: `email`, `name`, `password`.                                         |
++| `POST /api/auth/login`      | Sign in: `email`, `password`.                                                           |
++| `GET /api/users/me`         | The signed-in user, with `avatarUrl`.                                                   |
++| `POST /api/users/me/avatar` | Upload a profile picture: multipart field `file`, a PNG, JPEG or WebP image up to 2 MB. |
++| `GET /api/products`         | All products, newest first.                                                             |
++| `POST /api/products`        | Add a product (admin): `name`, `priceCents`.                                            |
++| `GET /api/products/:id`     | One product.                                                                            |
++| `DELETE /api/products/:id`  | Delete a product (admin).                                                               |
++| `GET /api/orders`           | The signed-in user's orders.                                                            |
++| `POST /api/orders`          | Order a product: `productId`, `quantity`.                                               |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127090245_user_avatar_url/migration.sql b/prisma/migrations/20261127090245_user_avatar_url/migration.sql
+new file mode 100644
+index 0000000..fe003a8
+--- /dev/null
++++ b/prisma/migrations/20261127090245_user_avatar_url/migration.sql
+@@ -0,0 +1,2 @@
++-- AlterTable
++ALTER TABLE "User" ADD COLUMN     "avatarUrl" TEXT;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..bd6816c 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -24,6 +24,8 @@ model User {
+   name         String
+   passwordHash String
+   role         Role      @default(CUSTOMER)
++  /// URL path of the profile picture, under /uploads; null until one is uploaded.
++  avatarUrl    String?
+   createdAt    DateTime  @default(now())
+   sessions     Session[]
+   orders       Order[]
+diff --git a/src/app/api/users/me/avatar/route.ts b/src/app/api/users/me/avatar/route.ts
+new file mode 100644
+index 0000000..1b71d27
+--- /dev/null
++++ b/src/app/api/users/me/avatar/route.ts
+@@ -0,0 +1,44 @@
++import { randomUUID } from 'node:crypto';
++import { mkdir, writeFile } from 'node:fs/promises';
++import { join } from 'node:path';
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++import { imageExtension, MAX_AVATAR_BYTES, uploadDir } from '../../../../../lib/uploads';
++
++// Room for the multipart boundaries and headers around the file itself.
++const FORM_OVERHEAD_BYTES = 64 * 1024;
++
++export async function POST(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  // Refuse an oversized body from its declared length, before reading it into memory.
++  const declared = Number(request.headers.get('content-length') ?? 0);
++  if (declared > MAX_AVATAR_BYTES + FORM_OVERHEAD_BYTES) {
++    return jsonError(413, 'images can be at most 2 MB');
++  }
++  let form: FormData;
++  try {
++    form = await request.formData();
++  } catch {
++    return jsonError(400, 'send the image as multipart/form-data');
++  }
++  const file = form.get('file');
++  if (!(file instanceof File)) return jsonError(400, 'send the image in the "file" field');
++  if (file.size > MAX_AVATAR_BYTES) return jsonError(413, 'images can be at most 2 MB');
++
++  const bytes = Buffer.from(await file.arrayBuffer());
++  const extension = imageExtension(bytes);
++  if (extension === null) return jsonError(400, 'only PNG, JPEG and WebP images are accepted');
++
++  // The server names the file, so the client's file name can never reach the file system.
++  const name = `${randomUUID()}.${extension}`;
++  const dir = uploadDir();
++  await mkdir(dir, { recursive: true });
++  await writeFile(join(dir, name), bytes, { flag: 'wx' });
++
++  const avatarUrl = `/uploads/${name}`;
++  await db.user.update({ where: { id: user.id }, data: { avatarUrl } });
++  return Response.json({ avatarUrl });
++}
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..05b4c4d 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -51,5 +51,11 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+ }
+ 
+ export function publicUser(user: User) {
+-  return { id: user.id, email: user.email, name: user.name, role: user.role };
++  return {
++    id: user.id,
++    email: user.email,
++    name: user.name,
++    role: user.role,
++    avatarUrl: user.avatarUrl,
++  };
+ }
+diff --git a/src/lib/uploads.ts b/src/lib/uploads.ts
+new file mode 100644
+index 0000000..5e2315c
+--- /dev/null
++++ b/src/lib/uploads.ts
+@@ -0,0 +1,22 @@
++import { join } from 'node:path';
++
++export const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
++
++/** Where uploaded files are stored: UPLOAD_DIR, or `uploads` in the project root. */
++export function uploadDir(): string {
++  return process.env.UPLOAD_DIR ?? join(process.cwd(), 'uploads');
++}
++
++const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
++
++/**
++ * The image type from the file's first bytes, or null. The name and content type a client sends
++ * are not trusted: anyone can call a script `avatar.png`.
++ */
++export function imageExtension(bytes: Buffer): 'png' | 'jpg' | 'webp' | null {
++  if (bytes.subarray(0, 8).equals(PNG)) return 'png';
++  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'jpg';
++  const riff = bytes.subarray(0, 4).toString('latin1');
++  if (riff === 'RIFF' && bytes.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
++  return null;
++}
+diff --git a/test/avatar.test.ts b/test/avatar.test.ts
+new file mode 100644
+index 0000000..ea1c86b
+--- /dev/null
++++ b/test/avatar.test.ts
+@@ -0,0 +1,59 @@
++import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
++import { POST as upload } from '../src/app/api/users/me/avatar/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++const PNG = Buffer.from(
++  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
++  'base64',
++);
++let dir: string;
++
++beforeAll(() => {
++  dir = mkdtempSync(join(tmpdir(), 'avatars-'));
++  process.env.UPLOAD_DIR = dir;
++});
++afterAll(() => {
++  delete process.env.UPLOAD_DIR;
++  rmSync(dir, { recursive: true, force: true });
++});
++beforeEach(resetDatabase);
++
++function uploadRequest(token: string, bytes: Buffer, name = 'me.png', type = 'image/png') {
++  const form = new FormData();
++  form.append('file', new File([new Uint8Array(bytes)], name, { type }));
++  return new Request('http://localhost/api/users/me/avatar', {
++    method: 'POST',
++    headers: { authorization: `Bearer ${token}` },
++    body: form,
++  });
++}
++
++describe('avatar upload', () => {
++  it('stores a PNG under a server-chosen name and shows it on the user', async () => {
++    const { token } = await createUser();
++    const response = await upload(uploadRequest(token, PNG, '../../evil.png'));
++    expect(response.status).toBe(200);
++    const { avatarUrl } = (await response.json()) as { avatarUrl: string };
++    expect(avatarUrl).toMatch(/^\/uploads\/[\w-]+\.png$/);
++    expect(readFileSync(join(dir, avatarUrl.slice('/uploads/'.length)))).toEqual(PNG);
++
++    const user = (await (await me(jsonRequest('/api/users/me', { token }))).json()) as {
++      user: { avatarUrl: string };
++    };
++    expect(user.user.avatarUrl).toBe(avatarUrl);
++  });
++
++  it('rejects a file that only claims to be an image, and one over 2 MB', async () => {
++    const { token } = await createUser();
++    const before = readdirSync(dir).length;
++    const fake = await upload(uploadRequest(token, Buffer.from('<?php echo 1;')));
++    expect(fake.status).toBe(400);
++    const big = Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024)]);
++    expect((await upload(uploadRequest(token, big))).status).toBe(413);
++    expect(readdirSync(dir)).toHaveLength(before);
++  });
++});

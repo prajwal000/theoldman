@@ -1,6 +1,7 @@
 // Loads and validates a task folder: evals/tasks/<id>/ with task.json, prompt.md, a starter
-// project and hidden tests. The hidden tests must stay outside the starter, or Claude would see
-// them during the run.
+// project and hidden tests. The starter is a shared base app from evals/starters/<base>/, a
+// folder in the task, or the base with the task's folder copied over it. The hidden tests must
+// stay outside the starter, or Claude would see them during the run.
 
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -13,16 +14,23 @@ export interface Task {
   readonly dir: string;
   readonly title: string;
   readonly prompt: string;
-  readonly starterDir: string;
+  /** Folders copied in this order to make the starter: the base, then the task's own. */
+  readonly starterDirs: readonly string[];
   readonly hiddenTestsDir: string;
   readonly timeoutMinutes: number;
   readonly services: readonly Service[];
 }
 
 export const MAX_TIMEOUT_MINUTES = 60;
-const KEYS = new Set(['title', 'starter', 'hiddenTests', 'timeoutMinutes', 'services']);
+const KEYS = new Set(['title', 'base', 'starter', 'hiddenTests', 'timeoutMinutes', 'services']);
+const BASE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-export function loadTask(tasksDir: string, id: string): Task {
+/** Loads evals/tasks/<id>; a `base` names a folder in `startersDir` (evals/starters/). */
+export function loadTask(
+  tasksDir: string,
+  id: string,
+  startersDir = join(tasksDir, '..', 'starters'),
+): Task {
   const dir = join(tasksDir, id);
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     throw new ConfigError(`Task "${id}" not found: there is no folder ${dir}.`);
@@ -37,7 +45,7 @@ export function loadTask(tasksDir: string, id: string): Task {
   const invalid = (message: string): ConfigError =>
     new ConfigError(`${where('task.json')}: ${message}`);
 
-  const { title, starter, hiddenTests, timeoutMinutes, services = [] } = json;
+  const { title, base, starter, hiddenTests, timeoutMinutes, services = [] } = json;
   if (typeof title !== 'string' || title.trim() === '') {
     throw invalid('"title" must be a non-empty string.');
   }
@@ -54,9 +62,22 @@ export function loadTask(tasksDir: string, id: string): Task {
   if (!Array.isArray(services) || !services.every(isService)) {
     throw invalid(`"services" must be a list of: ${SERVICES.join(', ')}.`);
   }
-  const starterDir = taskFolder(dir, starter, 'starter', invalid);
+  const starterDirs: string[] = [];
+  if (base !== undefined) {
+    if (typeof base !== 'string' || !BASE_NAME.test(base)) {
+      throw invalid('"base" must name a folder in evals/starters/, such as "next-prisma".');
+    }
+    const baseDir = join(startersDir, base);
+    if (!existsSync(baseDir) || !statSync(baseDir).isDirectory()) {
+      throw invalid(`"base" starter "${base}" does not exist in evals/starters/.`);
+    }
+    starterDirs.push(baseDir);
+  }
+  if (starter !== undefined || base === undefined) {
+    starterDirs.push(taskFolder(dir, starter, 'starter', invalid));
+  }
   const hiddenTestsDir = taskFolder(dir, hiddenTests, 'hiddenTests', invalid);
-  if (isInside(starterDir, hiddenTestsDir) || isInside(hiddenTestsDir, starterDir)) {
+  if (starterDirs.some((s) => isInside(s, hiddenTestsDir) || isInside(hiddenTestsDir, s))) {
     throw invalid(
       '"starter" and "hiddenTests" must be separate folders, so the hidden tests stay hidden.',
     );
@@ -75,7 +96,7 @@ export function loadTask(tasksDir: string, id: string): Task {
     dir,
     title: title.trim(),
     prompt,
-    starterDir,
+    starterDirs,
     hiddenTestsDir,
     timeoutMinutes,
     services,
@@ -128,18 +149,28 @@ function isInside(parent: string, child: string): boolean {
 }
 
 /**
- * SHA-256 of a folder's files: their paths (with `/`) and contents. Scoring rebuilds a run's
- * project from the starter and the run's diff, so the plan records which starter the run used.
+ * SHA-256 of the starter Claude gets: the files of `dirs` copied over each other in order, by
+ * path (with `/`) and content. Scoring rebuilds a run's project from the starter and the run's
+ * diff, so the plan records which starter the run used. For one folder it is that folder's hash.
  */
-export function folderHash(dir: string): string {
+export function starterHash(dirs: readonly string[]): string {
+  const files = new Map<string, string>();
+  for (const dir of dirs) {
+    for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = join(entry.parentPath, entry.name);
+      files.set(relative(dir, file).split(sep).join('/'), file);
+    }
+  }
   const hash = createHash('sha256');
-  const files = readdirSync(dir, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name))
-    .sort();
-  for (const file of files) {
-    hash.update(relative(dir, file).split(sep).join('/')).update('\0');
-    hash.update(readFileSync(file)).update('\0');
+  for (const path of [...files.keys()].sort()) {
+    hash.update(path).update('\0');
+    hash.update(readFileSync(files.get(path) ?? '')).update('\0');
   }
   return `sha256:${hash.digest('hex')}`;
+}
+
+/** SHA-256 of one folder's files: their paths (with `/`) and contents. */
+export function folderHash(dir: string): string {
+  return starterHash([dir]);
 }

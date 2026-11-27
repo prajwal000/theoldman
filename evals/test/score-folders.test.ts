@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DockerExec, ExecOptions } from '../src/docker.ts';
 import { ConfigError } from '../src/errors.ts';
-import { SCORE_IMAGE, SEMGREP_RULES_COMMIT } from '../src/images.ts';
+import { IMAGES, imageRefs, SCORE_IMAGE, SEMGREP_RULES_COMMIT } from '../src/images.ts';
 import { validateResults } from '../src/score/results.ts';
 import { readRunFolder } from '../src/score/run-folder.ts';
 import { scoreFolders } from '../src/score/score-folders.ts';
@@ -138,7 +138,7 @@ describe('scoreFolders', () => {
     expect(run.join(' ')).toContain('target=/hidden,readonly');
   });
 
-  it('refuses a task with services, which scoring cannot start yet', async () => {
+  it('scores each run of a task with Postgres against a fresh database', async () => {
     const tasksDir = join(root, 'tasks');
     cpSync(join(TASKS, '_template'), join(tasksDir, 'with-db'), { recursive: true });
     writeFileSync(
@@ -153,12 +153,65 @@ describe('scoreFolders', () => {
     );
     const withDb = plan();
     withDb.task = { ...(withDb.task as object), id: 'with-db' };
-    const folders = [readRunFolder(writeRunFolder(root, 'db', withDb, [{}]))];
+    const folders = [readRunFolder(writeRunFolder(root, 'db', withDb, [{}, {}]))];
     const { docker, calls } = fakeDocker();
+    const results = await scoreFolders({
+      folders,
+      tasksDir,
+      dockerDir: DOCKER_DIR,
+      env: ENV,
+      docker,
+    });
+    expect(results.tasks[0]?.conditions.with?.runs).toBe(2);
+
+    const steps = calls.map((call) => {
+      const at = call.args.indexOf('--profile');
+      return call.args[0] === 'compose' ? `compose ${String(call.args[at + 2])}` : call.args[0];
+    });
+    expect(steps).toEqual([
+      'version',
+      'pull',
+      'build',
+      'pull',
+      'compose up',
+      'run',
+      'compose down',
+      'compose up',
+      'run',
+      'compose down',
+    ]);
+    const up = calls.find((call) => call.args.includes('up'));
+    expect(up?.env.POSTGRES_IMAGE).toBe(imageRefs(IMAGES.postgres)[0]);
+    expect(up?.env.ANTHROPIC_API_KEY).toBeUndefined();
+    const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
+    expect(run.slice(4, 6)).toEqual(['--network', 'theoldman-score-db-with-1_default']);
+  });
+
+  it('removes the database when scoring a run fails', async () => {
+    const tasksDir = join(root, 'tasks');
+    cpSync(join(TASKS, '_template'), join(tasksDir, 'with-db'), { recursive: true });
+    writeFileSync(
+      join(tasksDir, 'with-db', 'task.json'),
+      JSON.stringify({
+        title: 'Template with a database',
+        starter: 'starter',
+        hiddenTests: 'hidden',
+        timeoutMinutes: 15,
+        services: ['postgres'],
+      }),
+    );
+    const withDb = plan();
+    withDb.task = { id: 'with-db', title: 'Template with a database', starterHash: null };
+    const folders = [readRunFolder(writeRunFolder(root, 'db', withDb, [{}]))];
+    const good = fakeDocker();
+    const docker: DockerExec = (args, options) =>
+      args[0] === 'run'
+        ? Promise.resolve({ code: 125, stdout: '', stderr: 'boom', timedOut: false })
+        : good.docker(args, options);
     await expect(
       scoreFolders({ folders, tasksDir, dockerDir: DOCKER_DIR, env: ENV, docker }),
-    ).rejects.toThrow('db: task with-db uses postgres, and scoring does not start services yet');
-    expect(calls).toEqual([]);
+    ).rejects.toThrow('the scoring container exited with 125');
+    expect(good.calls.at(-1)?.args).toContain('down');
   });
 
   it("counts docs findings on the run's diff, and a tool that could not scan as no value", async () => {

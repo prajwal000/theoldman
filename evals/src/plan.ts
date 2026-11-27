@@ -15,7 +15,7 @@ import {
   type ProviderAuth,
   type ProviderName,
 } from './provider.ts';
-import { folderHash, loadTask, type Task } from './task.ts';
+import { loadTask, starterHash, type Task } from './task.ts';
 
 export interface RunPlan {
   readonly createdAt: string;
@@ -78,7 +78,7 @@ export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Dat
       title: task.title,
       timeoutMinutes: task.timeoutMinutes,
       services: task.services,
-      starterHash: folderHash(task.starterDir),
+      starterHash: starterHash(task.starterDirs),
     },
     condition: args.condition,
     runs: args.runs,

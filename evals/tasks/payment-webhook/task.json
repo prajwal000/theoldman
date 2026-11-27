@@ -1,0 +1,7 @@
+{
+  "title": "Signed payment webhook",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

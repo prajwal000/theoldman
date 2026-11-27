@@ -1,0 +1,281 @@
+diff --git a/.env.example b/.env.example
+index e347b07..e49cfa1 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,2 +1,4 @@
+ # Postgres connection string for Prisma and the app.
+ DATABASE_URL=postgresql://shop:shop@localhost:5432/shop
++# Public URL of the app, for links in emails such as password resets.
++APP_URL=http://localhost:3000
+diff --git a/README.md b/README.md
+index 28ad73e..3cdb632 100644
+--- a/README.md
++++ b/README.md
+@@ -18,9 +18,10 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ ## Environment
+ 
+-| Variable       | What                       |
+-| -------------- | -------------------------- |
+-| `DATABASE_URL` | Postgres connection string |
++| Variable       | What                                                                         |
++| -------------- | ---------------------------------------------------------------------------- |
++| `DATABASE_URL` | Postgres connection string                                                   |
++| `APP_URL`      | Public URL of the app, for links in emails (default `http://localhost:3000`) |
+ 
+ ## Tests
+ 
+@@ -30,16 +31,18 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                                   | What                                                                                                                |
++| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`                 | Create an account: `email`, `name`, `password`.                                                                     |
++| `POST /api/auth/login`                  | Sign in: `email`, `password`.                                                                                       |
++| `POST /api/auth/password-reset/request` | Email a reset link: `email`. Same answer whether or not the account exists.                                         |
++| `POST /api/auth/password-reset/confirm` | Set a new password: `token`, `password`. Tokens work once, for one hour, and signing in again is needed everywhere. |
++| `GET /api/users/me`                     | The signed-in user.                                                                                                 |
++| `GET /api/products`                     | All products, newest first.                                                                                         |
++| `POST /api/products`                    | Add a product (admin): `name`, `priceCents`.                                                                        |
++| `GET /api/products/:id`                 | One product.                                                                                                        |
++| `DELETE /api/products/:id`              | Delete a product (admin).                                                                                           |
++| `GET /api/orders`                       | The signed-in user's orders.                                                                                        |
++| `POST /api/orders`                      | Order a product: `productId`, `quantity`.                                                                           |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127090212_password_reset_tokens/migration.sql b/prisma/migrations/20261127090212_password_reset_tokens/migration.sql
+new file mode 100644
+index 0000000..d0493be
+--- /dev/null
++++ b/prisma/migrations/20261127090212_password_reset_tokens/migration.sql
+@@ -0,0 +1,20 @@
++-- CreateTable
++CREATE TABLE "PasswordResetToken" (
++    "id" TEXT NOT NULL,
++    "tokenHash" TEXT NOT NULL,
++    "userId" TEXT NOT NULL,
++    "expiresAt" TIMESTAMP(3) NOT NULL,
++    "usedAt" TIMESTAMP(3),
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "PasswordResetToken_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE UNIQUE INDEX "PasswordResetToken_tokenHash_key" ON "PasswordResetToken"("tokenHash");
++
++-- CreateIndex
++CREATE INDEX "PasswordResetToken_userId_idx" ON "PasswordResetToken"("userId");
++
++-- AddForeignKey
++ALTER TABLE "PasswordResetToken" ADD CONSTRAINT "PasswordResetToken_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..3c8191b 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -27,6 +27,19 @@ model User {
+   createdAt    DateTime  @default(now())
+   sessions     Session[]
+   orders       Order[]
++  resetTokens  PasswordResetToken[]
++}
++
++model PasswordResetToken {
++  id        String    @id @default(cuid())
++  tokenHash String    @unique
++  userId    String
++  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
++  expiresAt DateTime
++  usedAt    DateTime?
++  createdAt DateTime  @default(now())
++
++  @@index([userId])
+ }
+ 
+ model Session {
+diff --git a/src/app/api/auth/password-reset/confirm/route.ts b/src/app/api/auth/password-reset/confirm/route.ts
+new file mode 100644
+index 0000000..fcea7cd
+--- /dev/null
++++ b/src/app/api/auth/password-reset/confirm/route.ts
+@@ -0,0 +1,40 @@
++import { hashPassword, hashToken, MIN_PASSWORD_LENGTH } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../../lib/http';
++
++export async function POST(request: Request): Promise<Response> {
++  const body = await readJson(request);
++  if (!isRecord(body) || typeof body.token !== 'string' || typeof body.password !== 'string') {
++    return jsonError(400, 'token and password are required');
++  }
++  if (body.password.length < MIN_PASSWORD_LENGTH) {
++    return jsonError(400, `password must be at least ${MIN_PASSWORD_LENGTH} characters`);
++  }
++
++  const tokenHash = hashToken(body.token);
++  const passwordHash = await hashPassword(body.password);
++  const now = new Date();
++  const userId = await db.$transaction(async (tx) => {
++    const token = await tx.passwordResetToken.findUnique({ where: { tokenHash } });
++    if (token === null || token.usedAt !== null || token.expiresAt <= now) return null;
++    // Claiming the token with a conditional update keeps it single-use under concurrent requests.
++    const claimed = await tx.passwordResetToken.updateMany({
++      where: { id: token.id, usedAt: null },
++      data: { usedAt: now },
++    });
++    if (claimed.count === 0) return null;
++
++    await tx.user.update({ where: { id: token.userId }, data: { passwordHash } });
++    // A reset is often a response to a stolen password: sign out everywhere and retire any other
++    // links that were sent.
++    await tx.session.deleteMany({ where: { userId: token.userId } });
++    await tx.passwordResetToken.updateMany({
++      where: { userId: token.userId, usedAt: null },
++      data: { usedAt: now },
++    });
++    return token.userId;
++  });
++
++  if (userId === null) return jsonError(400, 'this reset link is invalid or has expired');
++  return Response.json({ message: 'Your password has been reset. Sign in with the new password.' });
++}
+diff --git a/src/app/api/auth/password-reset/request/route.ts b/src/app/api/auth/password-reset/request/route.ts
+new file mode 100644
+index 0000000..6df28fb
+--- /dev/null
++++ b/src/app/api/auth/password-reset/request/route.ts
+@@ -0,0 +1,37 @@
++import { randomBytes } from 'node:crypto';
++import { hashToken } from '../../../../../lib/auth';
++import { appUrl } from '../../../../../lib/config';
++import { db } from '../../../../../lib/db';
++import { sendEmail } from '../../../../../lib/email';
++import { isRecord, jsonError, readJson } from '../../../../../lib/http';
++
++const TOKEN_LIFETIME_MS = 60 * 60 * 1000;
++
++// The same answer whether or not the account exists, so this route cannot reveal who has one.
++const ACCEPTED = { message: 'If an account exists for that email, a reset link is on its way.' };
++
++export async function POST(request: Request): Promise<Response> {
++  const body = await readJson(request);
++  if (!isRecord(body) || typeof body.email !== 'string') {
++    return jsonError(400, 'email is required');
++  }
++
++  const user = await db.user.findUnique({ where: { email: body.email.trim().toLowerCase() } });
++  if (user !== null) {
++    const token = randomBytes(32).toString('base64url');
++    await db.passwordResetToken.create({
++      data: {
++        userId: user.id,
++        tokenHash: hashToken(token),
++        expiresAt: new Date(Date.now() + TOKEN_LIFETIME_MS),
++      },
++    });
++    const link = new URL(`/reset-password?token=${token}`, appUrl()).href;
++    await sendEmail({
++      to: user.email,
++      subject: 'Reset your password',
++      text: `Reset your password here: ${link}\n\nThe link works once and expires in one hour. If you did not ask for it, you can ignore this email.`,
++    });
++  }
++  return Response.json(ACCEPTED);
++}
+diff --git a/src/lib/config.ts b/src/lib/config.ts
+new file mode 100644
+index 0000000..80c80ef
+--- /dev/null
++++ b/src/lib/config.ts
+@@ -0,0 +1,4 @@
++/** The app's public URL, for links in emails. */
++export function appUrl(): string {
++  return process.env.APP_URL ?? 'http://localhost:3000';
++}
+diff --git a/test/password-reset.test.ts b/test/password-reset.test.ts
+new file mode 100644
+index 0000000..c0feb4f
+--- /dev/null
++++ b/test/password-reset.test.ts
+@@ -0,0 +1,69 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { POST as login } from '../src/app/api/auth/login/route';
++import { POST as confirmReset } from '../src/app/api/auth/password-reset/confirm/route';
++import { POST as requestReset } from '../src/app/api/auth/password-reset/request/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { outbox } from '../src/lib/email';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(async () => {
++  await resetDatabase();
++  outbox.length = 0;
++});
++afterEach(() => {
++  vi.useRealTimers();
++});
++
++async function sendResetLink(email: string): Promise<string> {
++  await requestReset(jsonRequest('/api/auth/password-reset/request', { body: { email } }));
++  const token = /token=([\w-]+)/.exec(outbox.at(-1)?.text ?? '')?.[1];
++  if (token === undefined) throw new Error('no reset link was sent');
++  return token;
++}
++
++const confirmRequest = (token: string, password: string) =>
++  confirmReset(jsonRequest('/api/auth/password-reset/confirm', { body: { token, password } }));
++
++describe('password reset', () => {
++  it('resets the password and signs out existing sessions', async () => {
++    const { user, token: session } = await createUser();
++    const token = await sendResetLink(user.email);
++
++    expect((await confirmRequest(token, 'a brand new password')).status).toBe(200);
++    const signIn = { email: user.email, password: 'a brand new password' };
++    expect((await login(jsonRequest('/api/auth/login', { body: signIn }))).status).toBe(200);
++    expect((await me(jsonRequest('/api/users/me', { token: session }))).status).toBe(401);
++  });
++
++  it('gives the same answer for an unknown email and sends nothing', async () => {
++    const { user } = await createUser();
++    const known = await requestReset(
++      jsonRequest('/api/auth/password-reset/request', { body: { email: user.email } }),
++    );
++    const unknown = await requestReset(
++      jsonRequest('/api/auth/password-reset/request', { body: { email: 'nobody@example.com' } }),
++    );
++    expect([unknown.status, await unknown.json()]).toEqual([known.status, await known.json()]);
++    expect(outbox).toHaveLength(1);
++  });
++
++  it('accepts a token once and not after an hour', async () => {
++    const { user } = await createUser();
++    const used = await sendResetLink(user.email);
++    expect((await confirmRequest(used, 'first new password')).status).toBe(200);
++    expect((await confirmRequest(used, 'second new password')).status).toBe(400);
++
++    const late = await sendResetLink(user.email);
++    vi.useFakeTimers({ toFake: ['Date'] });
++    vi.setSystemTime(Date.now() + 61 * 60 * 1000);
++    expect((await confirmRequest(late, 'too late password')).status).toBe(400);
++  });
++
++  it('rejects an unknown token and a short password', async () => {
++    const { user } = await createUser();
++    const token = await sendResetLink(user.email);
++    expect((await confirmRequest('made-up', 'long enough password')).status).toBe(400);
++    expect((await confirmRequest(token, 'short')).status).toBe(400);
++    expect((await confirmRequest(token, 'long enough password')).status).toBe(200);
++  });
++});

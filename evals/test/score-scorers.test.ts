@@ -167,7 +167,14 @@ new file mode 100644
     '{"scripts":{"test":"vitest run","seed":"tsx seed.ts"},"dependencies":{"left-pad":"1.3.0"},"devDependencies":{"vitest":"5.1.1"}}';
 
   const score = (diff: string, extra: Partial<Parameters<typeof scoreDocs>[0]> = {}) =>
-    scoreDocs({ diff, files: {}, envExamples: {}, starterDir, summary: '', ...extra });
+    scoreDocs({
+      diff,
+      files: {},
+      envExamples: {},
+      starterDirs: [starterDir],
+      summary: '',
+      ...extra,
+    });
 
   it('flags an env variable no .env.example lists (OLDMAN-D01)', () => {
     expect(score(ENV_DIFF)).toEqual({ findings: 1, byRule: { 'OLDMAN-D01': 1 } });

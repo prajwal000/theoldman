@@ -18,7 +18,7 @@ import { inspectWorkspace, parseReport, workspaceArgs } from '../src/score/works
 import { plan, writeRunFolder } from './run-folders.ts';
 
 const INPUT = {
-  starterDir: 'C:\\evals\\tasks\\_template\\starter',
+  starterDirs: ['C:\\evals\\starters\\base', 'C:\\evals\\tasks\\_template\\starter'],
   hiddenTestsDir: 'C:\\evals\\tasks\\_template\\hidden',
   runDir: 'C:\\evals\\runs\\2026-11-27T10-00-00-000Z\\with-1',
   reportScript: 'C:\\evals\\docker\\score-report.mjs',
@@ -26,15 +26,19 @@ const INPUT = {
 };
 
 describe('workspaceArgs', () => {
-  it('mounts the starter, hidden tests, run folder and script read-only, with no environment', () => {
+  it('mounts the starters, hidden tests, run folder and script read-only, with no credentials', () => {
     const args = workspaceArgs(INPUT);
     expect(args).toEqual([
       'run',
       '--rm',
       '--name',
       'theoldman-score-x-with-1',
+      '-e',
+      'CHECKPOINT_DISABLE=1',
       '--mount',
-      `type=bind,source=${INPUT.starterDir},target=/starter,readonly`,
+      `type=bind,source=${INPUT.starterDirs[0] ?? ''},target=/starters/0,readonly`,
+      '--mount',
+      `type=bind,source=${INPUT.starterDirs[1] ?? ''},target=/starters/1,readonly`,
       '--mount',
       `type=bind,source=${INPUT.hiddenTestsDir},target=/hidden,readonly`,
       '--mount',
@@ -46,8 +50,20 @@ describe('workspaceArgs', () => {
       SCORE_IMAGE,
       '/score/report.mjs',
     ]);
-    expect(args).not.toContain('-e');
+    expect(args.filter((arg) => arg.includes('='))).not.toContainEqual(
+      expect.stringMatching(/KEY|TOKEN|SECRET|AWS/),
+    );
     expect(args).not.toContain('--env');
+  });
+
+  it("joins a task's database network and passes its URL", () => {
+    const args = workspaceArgs({ ...INPUT, network: 'theoldman-score-x_default' });
+    expect(args.slice(4, 8)).toEqual([
+      '--network',
+      'theoldman-score-x_default',
+      '-e',
+      'DATABASE_URL=postgresql://eval:eval@postgres:5432/eval',
+    ]);
   });
 
   it('refuses a path --mount would misread', () => {
