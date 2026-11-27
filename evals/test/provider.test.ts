@@ -19,13 +19,35 @@ describe('detectProvider', () => {
   it('picks the Anthropic API from ANTHROPIC_API_KEY', () => {
     expect(detectProvider({ ANTHROPIC_API_KEY: 'sk-ant-x' })).toEqual({
       name: 'anthropic',
+      auth: 'api-key',
       envNames: ['ANTHROPIC_API_KEY'],
     });
+  });
+
+  it('picks the Anthropic API on a subscription from CLAUDE_CODE_OAUTH_TOKEN', () => {
+    expect(detectProvider({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x' })).toEqual({
+      name: 'anthropic',
+      auth: 'subscription-token',
+      envNames: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    });
+  });
+
+  it('fails when both an API key and a subscription token are set', () => {
+    expect(
+      failure({ ANTHROPIC_API_KEY: 'sk-ant-x', CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x' }),
+    ).toMatch(/Mixed Anthropic credentials: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN/);
+  });
+
+  it('fails on a subscription token with Bedrock', () => {
+    expect(failure({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x', ...BEDROCK, ...KEYS })).toMatch(
+      /Mixed provider environment: both CLAUDE_CODE_OAUTH_TOKEN and CLAUDE_CODE_USE_BEDROCK/,
+    );
   });
 
   it('picks Bedrock with access keys', () => {
     expect(detectProvider({ ...BEDROCK, ...KEYS })).toEqual({
       name: 'bedrock',
+      auth: 'aws',
       envNames: [
         'CLAUDE_CODE_USE_BEDROCK',
         'AWS_REGION',
@@ -49,7 +71,7 @@ describe('detectProvider', () => {
     ]);
   });
 
-  it('reads the Bedrock flag the way Claude Code does', () => {
+  it('accepts the usual spellings of the Bedrock flag', () => {
     expect(
       detectProvider({ ...KEYS, AWS_REGION: 'us-east-1', CLAUDE_CODE_USE_BEDROCK: 'true' }).name,
     ).toBe('bedrock');
@@ -61,7 +83,7 @@ describe('detectProvider', () => {
   it('ignores AWS variables when Bedrock is not switched on', () => {
     expect(
       detectProvider({ ANTHROPIC_API_KEY: 'sk-ant-x', ...KEYS, AWS_REGION: 'eu-west-1' }),
-    ).toEqual({ name: 'anthropic', envNames: ['ANTHROPIC_API_KEY'] });
+    ).toEqual({ name: 'anthropic', auth: 'api-key', envNames: ['ANTHROPIC_API_KEY'] });
   });
 
   it('fails clearly when no provider is set', () => {
@@ -110,6 +132,7 @@ describe('detectProvider', () => {
     const secret = 'sk-ant-api03-DO-NOT-PRINT';
     const messages = [
       failure({ ANTHROPIC_API_KEY: secret, ...BEDROCK }),
+      failure({ ANTHROPIC_API_KEY: secret, CLAUDE_CODE_OAUTH_TOKEN: secret }),
       failure({ ...BEDROCK, AWS_ACCESS_KEY_ID: secret }),
       failure({ ...BEDROCK, AWS_SECRET_ACCESS_KEY: secret, AWS_BEARER_TOKEN_BEDROCK: secret }),
     ];

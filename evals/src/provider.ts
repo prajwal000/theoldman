@@ -6,9 +6,15 @@ import { ConfigError } from './errors.ts';
 
 export type Env = Readonly<Record<string, string | undefined>>;
 export type ProviderName = 'anthropic' | 'bedrock';
+/**
+ * `subscription-token` is a Claude subscription's long-lived token (`claude setup-token`): usage
+ * counts against the plan instead of API credits, so it is for runs that are not published.
+ */
+export type ProviderAuth = 'api-key' | 'subscription-token' | 'aws';
 
 export interface Provider {
   readonly name: ProviderName;
+  readonly auth: ProviderAuth;
   /** Names of the variables the container needs, in a stable order. */
   readonly envNames: readonly string[];
 }
@@ -20,7 +26,7 @@ const UNSUPPORTED = ['CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'];
 const isOn = (env: Env, name: string): boolean => ON.has((env[name] ?? '').trim().toLowerCase());
 const isSet = (env: Env, name: string): boolean => (env[name] ?? '').trim() !== '';
 
-const SETUP = `Set ANTHROPIC_API_KEY for the Anthropic API, or CLAUDE_CODE_USE_BEDROCK=1, AWS_REGION and AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_BEARER_TOKEN_BEDROCK) for Amazon Bedrock.`;
+const SETUP = `Set ANTHROPIC_API_KEY for the Anthropic API (or CLAUDE_CODE_OAUTH_TOKEN from \`claude setup-token\` for an unpublished run on a Claude subscription), or CLAUDE_CODE_USE_BEDROCK=1, AWS_REGION and AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or AWS_BEARER_TOKEN_BEDROCK) for Amazon Bedrock.`;
 
 export function detectProvider(env: Env): Provider {
   const unsupported = UNSUPPORTED.filter((name) => isOn(env, name));
@@ -29,15 +35,28 @@ export function detectProvider(env: Env): Provider {
       `${unsupported.join(' and ')} is set, but evals run only on the Anthropic API or Amazon Bedrock. ${SETUP}`,
     );
   }
-  const anthropic = isSet(env, 'ANTHROPIC_API_KEY');
+  const anthropic = ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'].filter((name) =>
+    isSet(env, name),
+  );
   const bedrock = isOn(env, 'CLAUDE_CODE_USE_BEDROCK');
-  if (anthropic && bedrock) {
+  if (anthropic.length > 0 && bedrock) {
     throw new ConfigError(
-      'Mixed provider environment: both ANTHROPIC_API_KEY and CLAUDE_CODE_USE_BEDROCK are set. Unset one of them.',
+      `Mixed provider environment: both ${anthropic.join(' and ')} and CLAUDE_CODE_USE_BEDROCK are set. Unset one of them.`,
     );
   }
-  if (anthropic) return { name: 'anthropic', envNames: ['ANTHROPIC_API_KEY'] };
-  if (bedrock) return { name: 'bedrock', envNames: bedrockEnv(env) };
+  // Which of the two Claude Code would use is not documented, so the runner does not guess.
+  if (anthropic.length === 2) {
+    throw new ConfigError(
+      'Mixed Anthropic credentials: both ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN are set. Unset one of them.',
+    );
+  }
+  if (anthropic[0] === 'ANTHROPIC_API_KEY') {
+    return { name: 'anthropic', auth: 'api-key', envNames: ['ANTHROPIC_API_KEY'] };
+  }
+  if (anthropic[0] === 'CLAUDE_CODE_OAUTH_TOKEN') {
+    return { name: 'anthropic', auth: 'subscription-token', envNames: ['CLAUDE_CODE_OAUTH_TOKEN'] };
+  }
+  if (bedrock) return { name: 'bedrock', auth: 'aws', envNames: bedrockEnv(env) };
   throw new ConfigError(`No model provider is configured. ${SETUP}`);
 }
 

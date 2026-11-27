@@ -5,11 +5,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Condition, RunArgs } from './args.ts';
-import { ConfigError } from './errors.ts';
-import { IMAGES, imageRefs } from './images.ts';
+import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs } from './images.ts';
 import { type Models, readModels, requireExactModels } from './models.ts';
-import { detectProvider, type Env, type ProviderName } from './provider.ts';
-import { loadTask } from './task.ts';
+import { ConfigError } from './errors.ts';
+import {
+  detectProvider,
+  type Env,
+  type Provider,
+  type ProviderAuth,
+  type ProviderName,
+} from './provider.ts';
+import { loadTask, type Task } from './task.ts';
 
 export interface RunPlan {
   readonly createdAt: string;
@@ -23,9 +29,15 @@ export interface RunPlan {
   readonly runs: number;
   readonly dryRun: boolean;
   readonly publish: boolean;
-  readonly provider: { readonly name: ProviderName; readonly env: readonly string[] };
+  readonly provider: {
+    readonly name: ProviderName;
+    readonly auth: ProviderAuth;
+    readonly env: readonly string[];
+  };
   readonly models: Models;
-  /** Pull references per image, Docker Hub first, then its ECR Public mirror. */
+  readonly claudeCode: string;
+  readonly agentImage: string;
+  /** Pull references per base image, Docker Hub first, then its ECR Public mirror. */
   readonly images: Readonly<Record<string, readonly string[]>>;
 }
 
@@ -34,23 +46,25 @@ export interface Dirs {
   readonly runsDir: string;
 }
 
+export interface PlannedRun {
+  readonly dir: string;
+  readonly plan: RunPlan;
+  readonly task: Task;
+  readonly provider: Provider;
+}
+
 export const PLAN_FILE = 'plan.json';
 
-export function planRun(
-  args: RunArgs,
-  env: Env,
-  dirs: Dirs,
-  now: Date = new Date(),
-): { readonly dir: string; readonly plan: RunPlan } {
+export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Date()): PlannedRun {
   const task = loadTask(dirs.tasksDir, args.task);
   const provider = detectProvider(env);
   const models = readModels(env);
-  if (args.publish) requireExactModels(provider.name, models);
-  if (!args.dryRun) {
+  if (args.publish && provider.auth === 'subscription-token') {
     throw new ConfigError(
-      'Only --dry-run is available so far: running tasks in Docker is not built yet.',
+      'A run marked for publication needs ANTHROPIC_API_KEY: published results come from the Anthropic API (ADR 0007), and CLAUDE_CODE_OAUTH_TOKEN runs on a Claude subscription.',
     );
   }
+  if (args.publish) requireExactModels(provider.name, models);
 
   const images: Record<string, string[]> = { node: imageRefs(IMAGES.node) };
   for (const service of task.services) images[service] = imageRefs(IMAGES[service]);
@@ -67,15 +81,30 @@ export function planRun(
     runs: args.runs,
     dryRun: args.dryRun,
     publish: args.publish,
-    provider: { name: provider.name, env: provider.envNames },
+    provider: { name: provider.name, auth: provider.auth, env: provider.envNames },
     models,
+    claudeCode: CLAUDE_CODE_VERSION,
+    agentImage: AGENT_IMAGE,
     images,
   };
 
   // Colons are not allowed in Windows file names.
-  const dir = join(dirs.runsDir, plan.createdAt.replace(/[:.]/g, '-'));
-  mkdirSync(dirs.runsDir, { recursive: true });
-  mkdirSync(dir);
+  const dir = newRunDir(dirs.runsDir, plan.createdAt.replace(/[:.]/g, '-'));
   writeFileSync(join(dir, PLAN_FILE), `${JSON.stringify(plan, null, 2)}\n`);
-  return { dir, plan };
+  return { dir, plan, task, provider };
+}
+
+/** Creates runs/<stamp>/, or runs/<stamp>-2/ and so on when runs start in the same millisecond. */
+function newRunDir(runsDir: string, stamp: string): string {
+  mkdirSync(runsDir, { recursive: true });
+  for (let n = 1; ; n++) {
+    const dir = join(runsDir, n === 1 ? stamp : `${stamp}-${String(n)}`);
+    try {
+      mkdirSync(dir);
+      return dir;
+    } catch (error) {
+      const exists = error instanceof Error && 'code' in error && error.code === 'EEXIST';
+      if (!exists || n >= 100) throw error;
+    }
+  }
 }

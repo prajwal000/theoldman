@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunArgs } from '../src/args.ts';
 import { ConfigError } from '../src/errors.ts';
-import { IMAGES, imageRefs } from '../src/images.ts';
+import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs } from '../src/images.ts';
 import { PLAN_FILE, planRun } from '../src/plan.ts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
@@ -52,8 +52,10 @@ describe('planRun', () => {
       runs: 1,
       dryRun: true,
       publish: false,
-      provider: { name: 'anthropic', env: ['ANTHROPIC_API_KEY'] },
+      provider: { name: 'anthropic', auth: 'api-key', env: ['ANTHROPIC_API_KEY'] },
       models: { ANTHROPIC_MODEL: 'sonnet', ANTHROPIC_DEFAULT_SONNET_MODEL: null },
+      claudeCode: CLAUDE_CODE_VERSION,
+      agentImage: AGENT_IMAGE,
       images: { node: imageRefs(IMAGES.node) },
     });
   });
@@ -92,6 +94,7 @@ describe('planRun', () => {
     );
     expect(written.provider).toEqual({
       name: 'bedrock',
+      auth: 'aws',
       env: ['CLAUDE_CODE_USE_BEDROCK', 'AWS_REGION', 'AWS_BEARER_TOKEN_BEDROCK'],
     });
   });
@@ -119,10 +122,43 @@ describe('planRun', () => {
     expect(existsSync(runsDir)).toBe(false);
   });
 
-  it('refuses a real run until running in Docker exists', () => {
-    expect(() => plan({ dryRun: false }, { ANTHROPIC_API_KEY: 'sk-ant-x' })).toThrow(
-      /Only --dry-run is available so far/,
+  it('plans an unpublished run on a subscription token, without saving the token', () => {
+    const token = 'sk-ant-oat01-SECRET-SUBSCRIPTION-TOKEN';
+    const { dir, plan: written } = plan({}, { CLAUDE_CODE_OAUTH_TOKEN: token });
+    expect(written.provider).toEqual({
+      name: 'anthropic',
+      auth: 'subscription-token',
+      env: ['CLAUDE_CODE_OAUTH_TOKEN'],
+    });
+    expect(readFileSync(join(dir, PLAN_FILE), 'utf8')).not.toContain(token);
+  });
+
+  it('refuses to publish a run on a subscription token', () => {
+    const env = {
+      CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-x',
+      ANTHROPIC_MODEL: 'claude-sonnet-5-5',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5-5',
+    };
+    expect(() => plan({ publish: true }, env)).toThrow(
+      /publication needs ANTHROPIC_API_KEY: published results come from the Anthropic API \(ADR 0007\)/,
     );
     expect(existsSync(runsDir)).toBe(false);
+  });
+
+  it('gives runs started in the same millisecond their own folders', () => {
+    const env = { ANTHROPIC_API_KEY: 'sk-ant-x' };
+    const first = plan({}, env).dir;
+    const second = plan({ condition: 'without' }, env).dir;
+    expect(first).toBe(join(runsDir, '2026-11-27T10-15-30-123Z'));
+    expect(second).toBe(join(runsDir, '2026-11-27T10-15-30-123Z-2'));
+    expect(JSON.parse(readFileSync(join(first, PLAN_FILE), 'utf8'))).toMatchObject({
+      condition: 'with',
+    });
+  });
+
+  it('plans a real run the same way, for the Docker step to carry out', () => {
+    const { plan: written, task } = plan({ dryRun: false }, { ANTHROPIC_API_KEY: 'sk-ant-x' });
+    expect(written.dryRun).toBe(false);
+    expect(task.id).toBe('_template');
   });
 });

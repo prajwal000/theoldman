@@ -1,0 +1,37 @@
+# One eval run: the agent container Claude Code runs in and, for tasks that ask for it, Postgres.
+# The runner starts a separate project per run and removes it afterwards. Credentials are listed by
+# name only: Compose takes their values from the runner's environment, which holds only the chosen
+# provider's variables, so no value is ever written here or to a command line.
+services:
+  agent:
+    image: ${AGENT_IMAGE:?the eval runner sets AGENT_IMAGE}
+    command: ['sleep', 'infinity']
+    init: true
+    user: node
+    working_dir: /workspace
+    environment:
+      - DISABLE_AUTOUPDATER=1
+      - ANTHROPIC_API_KEY
+      - CLAUDE_CODE_OAUTH_TOKEN
+      - CLAUDE_CODE_USE_BEDROCK
+      - AWS_REGION
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
+      - AWS_BEARER_TOKEN_BEDROCK
+      - ANTHROPIC_MODEL
+      - ANTHROPIC_DEFAULT_SONNET_MODEL
+
+  postgres:
+    # Interpolation covers every service, so this needs a default even when the profile is off.
+    image: ${POSTGRES_IMAGE:-postgres-image-not-set}
+    profiles: ['postgres']
+    environment:
+      - POSTGRES_USER=eval
+      - POSTGRES_PASSWORD=eval
+      - POSTGRES_DB=eval
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'eval', '-d', 'eval']
+      interval: 2s
+      timeout: 3s
+      retries: 30
