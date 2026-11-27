@@ -11,6 +11,15 @@ const ids = readdirSync(TASKS, { withFileTypes: true })
   .filter((entry) => entry.isDirectory() && entry.name !== '_template')
   .map((entry) => entry.name);
 
+describe('the task list', () => {
+  it('names every task in tasks/README.md, and nothing else', () => {
+    const listed = [...readFileSync(join(TASKS, 'README.md'), 'utf8').matchAll(/^\| `([^`]+)`/gm)]
+      .map((match) => match[1])
+      .sort();
+    expect(listed).toEqual([...ids].sort());
+  });
+});
+
 describe.each(ids)('task %s', (id) => {
   const task = loadTask(TASKS, id);
 

@@ -1,0 +1,7 @@
+{
+  "title": "Order history CSV export",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

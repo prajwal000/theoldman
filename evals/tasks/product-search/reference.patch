@@ -1,0 +1,152 @@
+diff --git a/README.md b/README.md
+index 28ad73e..bfc225c 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                                                                            |
++| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                                                                 |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                                                                   |
++| `GET /api/users/me`        | The signed-in user.                                                                                                                                             |
++| `GET /api/products`        | All products, newest first.                                                                                                                                     |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                                                                    |
++| `GET /api/products/search` | Search: `q` (part of the name, any case), `minPrice` and `maxPrice` (cents), `sort` = `newest` (default), `price` or `-price`. Answers `{ items }`, at most 50. |
++| `GET /api/products/:id`    | One product.                                                                                                                                                    |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                                                                                       |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                                                                    |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                                                                       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/products/search/route.ts b/src/app/api/products/search/route.ts
+new file mode 100644
+index 0000000..b8b5338
+--- /dev/null
++++ b/src/app/api/products/search/route.ts
+@@ -0,0 +1,48 @@
++import type { Prisma } from '../../../../generated/prisma/client';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++const MAX_RESULTS = 50;
++
++// Sort keys map to fixed orderings, so the query string never reaches the query itself.
++const SORTS: Readonly<Record<string, Prisma.ProductOrderByWithRelationInput[]>> = {
++  newest: [{ createdAt: 'desc' }, { id: 'desc' }],
++  price: [{ priceCents: 'asc' }, { id: 'asc' }],
++  '-price': [{ priceCents: 'desc' }, { id: 'desc' }],
++};
++
++// Prisma passes `contains` to Postgres LIKE as is, where % and _ are wildcards. Escaping them
++// (and the backslash, LIKE's default escape character) makes them match literally.
++const likeLiteral = (text: string): string => text.replace(/[\\%_]/g, '\\$&');
++
++/** A whole number of cents from a query parameter: undefined when absent, null when invalid. */
++function cents(value: string | null): number | null | undefined {
++  if (value === null) return undefined;
++  return /^\d+$/.test(value) ? Number(value) : null;
++}
++
++export async function GET(request: Request): Promise<Response> {
++  const query = new URL(request.url).searchParams;
++  const minPrice = cents(query.get('minPrice'));
++  const maxPrice = cents(query.get('maxPrice'));
++  if (minPrice === null || maxPrice === null) {
++    return jsonError(400, 'minPrice and maxPrice must be whole, non-negative cents');
++  }
++  if (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice) {
++    return jsonError(400, 'minPrice must not be above maxPrice');
++  }
++  const sortKey = query.get('sort') ?? 'newest';
++  const orderBy = Object.hasOwn(SORTS, sortKey) ? SORTS[sortKey] : undefined;
++  if (orderBy === undefined) return jsonError(400, 'sort must be newest, price or -price');
++
++  const q = query.get('q')?.trim() ?? '';
++  const items = await db.product.findMany({
++    where: {
++      ...(q === '' ? {} : { name: { contains: likeLiteral(q), mode: 'insensitive' } }),
++      priceCents: { gte: minPrice, lte: maxPrice },
++    },
++    orderBy,
++    take: MAX_RESULTS,
++  });
++  return Response.json({ items });
++}
+diff --git a/test/search.test.ts b/test/search.test.ts
+new file mode 100644
+index 0000000..0ce9619
+--- /dev/null
++++ b/test/search.test.ts
+@@ -0,0 +1,59 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/products/search/route';
++import { db } from '../src/lib/db';
++import { jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function search(query: string): Promise<{ status: number; names: string[] }> {
++  const response = await GET(jsonRequest(`/api/products/search?${query}`));
++  if (response.status !== 200) return { status: response.status, names: [] };
++  const body = (await response.json()) as { items: { name: string }[] };
++  return { status: 200, names: body.items.map((item) => item.name) };
++}
++
++async function seed(products: [string, number][]): Promise<void> {
++  await db.product.createMany({
++    data: products.map(([name, priceCents], i) => ({
++      name,
++      priceCents,
++      createdAt: new Date(1_000_000 + i * 1000),
++    })),
++  });
++}
++
++describe('product search', () => {
++  it('matches names case-insensitively, with % and _ taken literally', async () => {
++    await seed([
++      ['Blue MUG', 1200],
++      ['Teapot', 2500],
++      ['100% cotton tee', 1500],
++      ['100 cotton tee', 1400],
++      ['a_b', 100],
++      ['axb', 100],
++    ]);
++    expect((await search('q=mug')).names).toEqual(['Blue MUG']);
++    expect((await search(`q=${encodeURIComponent('100%')}`)).names).toEqual(['100% cotton tee']);
++    expect((await search('q=a_b')).names).toEqual(['a_b']);
++  });
++
++  it('filters by price and sorts', async () => {
++    await seed([
++      ['Cheap', 100],
++      ['Middle', 500],
++      ['Dear', 900],
++    ]);
++    expect((await search('minPrice=500&maxPrice=900&sort=price')).names).toEqual([
++      'Middle',
++      'Dear',
++    ]);
++    expect((await search('sort=-price')).names).toEqual(['Dear', 'Middle', 'Cheap']);
++    expect((await search('')).names).toEqual(['Dear', 'Middle', 'Cheap']);
++  });
++
++  it('rejects bad parameters', async () => {
++    for (const query of ['minPrice=abc', 'maxPrice=-1', 'minPrice=9&maxPrice=1', 'sort=name']) {
++      expect((await search(query)).status).toBe(400);
++    }
++  });
++});

@@ -1,0 +1,7 @@
+{
+  "title": "Profile editing without mass assignment",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

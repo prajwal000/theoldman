@@ -1,0 +1,140 @@
+diff --git a/README.md b/README.md
+index 28ad73e..49e2056 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                           |
++| -------------------------- | ---------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                  |
++| `GET /api/users/me`        | The signed-in user.                                                                            |
++| `PATCH /api/users/me`      | Change your `name` and/or `email`. A new email needs `currentPassword`; one in use gets a 409. |
++| `GET /api/products`        | All products, newest first.                                                                    |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                   |
++| `GET /api/products/:id`    | One product.                                                                                   |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                      |
++| `GET /api/orders`          | The signed-in user's orders.                                                                   |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                      |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/users/me/route.ts b/src/app/api/users/me/route.ts
+index e86341b..11acbf7 100644
+--- a/src/app/api/users/me/route.ts
++++ b/src/app/api/users/me/route.ts
+@@ -1,8 +1,52 @@
+-import { getCurrentUser, publicUser } from '../../../../lib/auth';
+-import { jsonError } from '../../../../lib/http';
++import { Prisma } from '../../../../generated/prisma/client';
++import { getCurrentUser, publicUser, verifyPassword } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
++
++const EMAIL = /^[^\s@]+@[^\s@]+$/;
+ 
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+   return Response.json({ user: publicUser(user) });
+ }
++
++export async function PATCH(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  const body = await readJson(request);
++  if (!isRecord(body)) return jsonError(400, 'send a JSON object');
++
++  // Only these two fields are copied from the body, so `role` or anything else in it is ignored.
++  const changes: { name?: string; email?: string } = {};
++  if (body.name !== undefined) {
++    if (typeof body.name !== 'string' || body.name.trim() === '') {
++      return jsonError(400, 'name must not be empty');
++    }
++    changes.name = body.name.trim();
++  }
++  if (body.email !== undefined) {
++    if (typeof body.email !== 'string' || !EMAIL.test(body.email.trim())) {
++      return jsonError(400, 'email is not valid');
++    }
++    const email = body.email.trim().toLowerCase();
++    if (email !== user.email) {
++      // A stolen session must not be enough to take over the account through its email.
++      const password = body.currentPassword;
++      if (typeof password !== 'string' || !(await verifyPassword(password, user.passwordHash))) {
++        return jsonError(403, 'changing the email needs your current password');
++      }
++      changes.email = email;
++    }
++  }
++
++  try {
++    const updated = await db.user.update({ where: { id: user.id }, data: changes });
++    return Response.json({ user: publicUser(updated) });
++  } catch (error) {
++    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
++      return jsonError(409, 'an account with this email already exists');
++    }
++    throw error;
++  }
++}
+diff --git a/test/profile.test.ts b/test/profile.test.ts
+new file mode 100644
+index 0000000..5a74b10
+--- /dev/null
++++ b/test/profile.test.ts
+@@ -0,0 +1,42 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { PATCH } from '../src/app/api/users/me/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const update = (token: string, body: unknown) =>
++  PATCH(jsonRequest('/api/users/me', { method: 'PATCH', body, token }));
++
++describe('profile update', () => {
++  it('changes the name and ignores fields users may not set', async () => {
++    const { user, token } = await createUser();
++    const response = await update(token, { name: ' Ada ', role: 'ADMIN' });
++    expect(response.status).toBe(200);
++    expect(await response.json()).toMatchObject({ user: { name: 'Ada', role: 'CUSTOMER' } });
++    expect((await db.user.findUniqueOrThrow({ where: { id: user.id } })).role).toBe('CUSTOMER');
++  });
++
++  it('needs the current password to change the email', async () => {
++    const { token } = await createUser('CUSTOMER', 'current password');
++    expect((await update(token, { email: 'new@example.com' })).status).toBe(403);
++    expect(
++      (await update(token, { email: 'new@example.com', currentPassword: 'nope' })).status,
++    ).toBe(403);
++    const changed = await update(token, {
++      email: 'New@Example.com',
++      currentPassword: 'current password',
++    });
++    expect(await changed.json()).toMatchObject({ user: { email: 'new@example.com' } });
++  });
++
++  it('refuses an email that another account uses', async () => {
++    const other = await createUser();
++    const { token } = await createUser('CUSTOMER', 'current password');
++    const response = await update(token, {
++      email: other.user.email,
++      currentPassword: 'current password',
++    });
++    expect(response.status).toBe(409);
++  });
++});

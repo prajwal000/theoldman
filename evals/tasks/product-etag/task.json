@@ -1,0 +1,7 @@
+{
+  "title": "Product edits with ETags and optimistic concurrency",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

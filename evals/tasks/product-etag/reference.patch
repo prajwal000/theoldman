@@ -1,0 +1,228 @@
+diff --git a/README.md b/README.md
+index 28ad73e..f5cc33a 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                                                   |
++| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                                        |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                                          |
++| `GET /api/users/me`        | The signed-in user.                                                                                                                    |
++| `GET /api/products`        | All products, newest first.                                                                                                            |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                                           |
++| `GET /api/products/:id`    | One product, with an `ETag`; `If-None-Match` with it gives a 304.                                                                      |
++| `PATCH /api/products/:id`  | Change `name` and/or `priceCents` (admin). Needs `If-Match` with the product's ETag: 428 without it, 412 if the product changed since. |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                                                              |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                                           |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                                              |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127115153_product_version/migration.sql b/prisma/migrations/20261127115153_product_version/migration.sql
+new file mode 100644
+index 0000000..04adeee
+--- /dev/null
++++ b/prisma/migrations/20261127115153_product_version/migration.sql
+@@ -0,0 +1,2 @@
++-- AlterTable
++ALTER TABLE "Product" ADD COLUMN     "version" INTEGER NOT NULL DEFAULT 1;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..b637cc5 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -42,6 +42,8 @@ model Product {
+   id         String   @id @default(cuid())
+   name       String
+   priceCents Int
++  /// Bumped on every change; the product's ETag is built from it.
++  version    Int      @default(1)
+   createdAt  DateTime @default(now())
+   orders     Order[]
+ }
+diff --git a/src/app/api/products/[id]/route.ts b/src/app/api/products/[id]/route.ts
+index c357885..b75743a 100644
+--- a/src/app/api/products/[id]/route.ts
++++ b/src/app/api/products/[id]/route.ts
+@@ -1,16 +1,69 @@
+ import { getCurrentUser } from '../../../../lib/auth';
+ import { db } from '../../../../lib/db';
+-import { jsonError } from '../../../../lib/http';
++import { etagFor, matchesAny, versionFromIfMatch } from '../../../../lib/etag';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
+ 
+ interface Context {
+   readonly params: Promise<{ id: string }>;
+ }
+ 
+-export async function GET(_request: Request, { params }: Context): Promise<Response> {
++export async function GET(request: Request, { params }: Context): Promise<Response> {
+   const { id } = await params;
+   const product = await db.product.findUnique({ where: { id } });
+   if (product === null) return jsonError(404, 'product not found');
+-  return Response.json(product);
++  const etag = etagFor(product.version);
++  if (matchesAny(request.headers.get('if-none-match'), etag)) {
++    return new Response(null, { status: 304, headers: { ETag: etag } });
++  }
++  return Response.json(product, { headers: { ETag: etag } });
++}
++
++export async function PATCH(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can edit products');
++
++  const ifMatch = request.headers.get('if-match');
++  if (ifMatch === null) return jsonError(428, 'send If-Match with the ETag you last read');
++
++  const body = await readJson(request);
++  if (!isRecord(body)) return jsonError(400, 'send a JSON object');
++  const changes: { name?: string; priceCents?: number } = {};
++  if (body.name !== undefined) {
++    if (typeof body.name !== 'string' || body.name.trim() === '') {
++      return jsonError(400, 'name must not be empty');
++    }
++    changes.name = body.name.trim();
++  }
++  if (body.priceCents !== undefined) {
++    if (
++      typeof body.priceCents !== 'number' ||
++      !Number.isInteger(body.priceCents) ||
++      body.priceCents < 0
++    ) {
++      return jsonError(400, 'priceCents must be a whole, non-negative number');
++    }
++    changes.priceCents = body.priceCents;
++  }
++  if (Object.keys(changes).length === 0) return jsonError(400, 'send name and/or priceCents');
++
++  const { id } = await params;
++  const version = versionFromIfMatch(ifMatch);
++  // The version check and the write are one statement, so of two edits based on the same version
++  // exactly one wins and the other gets a 412.
++  const { count } =
++    version === null
++      ? { count: 0 }
++      : await db.product.updateMany({
++          where: { id, version },
++          data: { ...changes, version: { increment: 1 } },
++        });
++  const product = await db.product.findUnique({ where: { id } });
++  if (product === null) return jsonError(404, 'product not found');
++  if (count === 0) {
++    return jsonError(412, 'the product changed since you read it; reload and try again');
++  }
++  return Response.json(product, { headers: { ETag: etagFor(product.version) } });
+ }
+ 
+ export async function DELETE(request: Request, { params }: Context): Promise<Response> {
+diff --git a/src/lib/etag.ts b/src/lib/etag.ts
+new file mode 100644
+index 0000000..a7d8715
+--- /dev/null
++++ b/src/lib/etag.ts
+@@ -0,0 +1,23 @@
++// Strong ETags from a row version, for caching (If-None-Match) and optimistic concurrency
++// (If-Match). The header lists can hold several tags and the * wildcard.
++
++export function etagFor(version: number): string {
++  return `"v${String(version)}"`;
++}
++
++/** The tags in an If-Match or If-None-Match header, with weak markers removed. */
++function tags(header: string): string[] {
++  return header.split(',').map((tag) => tag.trim().replace(/^W\//, ''));
++}
++
++export function matchesAny(header: string | null, etag: string): boolean {
++  if (header === null) return false;
++  return tags(header).some((tag) => tag === '*' || tag === etag);
++}
++
++/** The version an If-Match header names, or null if it names none we issued. */
++export function versionFromIfMatch(header: string): number | null {
++  const [tag] = tags(header);
++  const match = /^"v(\d+)"$/.exec(tag ?? '');
++  return match?.[1] === undefined ? null : Number(match[1]);
++}
+diff --git a/test/etag.test.ts b/test/etag.test.ts
+new file mode 100644
+index 0000000..a0fc664
+--- /dev/null
++++ b/test/etag.test.ts
+@@ -0,0 +1,62 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET, PATCH } from '../src/app/api/products/[id]/route';
++import { db } from '../src/lib/db';
++import { createUser, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function request(
++  id: string,
++  init: { method?: string; headers?: Record<string, string>; body?: unknown },
++) {
++  return new Request(`http://localhost/api/products/${id}`, {
++    method: init.method ?? 'GET',
++    headers: { 'content-type': 'application/json', ...init.headers },
++    body: init.body === undefined ? undefined : JSON.stringify(init.body),
++  });
++}
++
++describe('product ETags', () => {
++  it('answers 304 for a current ETag and changes it on every edit', async () => {
++    const { token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1 } });
++    const etag =
++      (await GET(request(product.id, {}), params({ id: product.id }))).headers.get('etag') ?? '';
++    const cached = await GET(
++      request(product.id, { headers: { 'if-none-match': etag } }),
++      params({ id: product.id }),
++    );
++    expect(cached.status).toBe(304);
++
++    const edited = await PATCH(
++      request(product.id, {
++        method: 'PATCH',
++        headers: { authorization: `Bearer ${token}`, 'if-match': etag },
++        body: { priceCents: 2 },
++      }),
++      params({ id: product.id }),
++    );
++    expect(edited.status).toBe(200);
++    expect(edited.headers.get('etag')).not.toBe(etag);
++  });
++
++  it('needs If-Match and refuses a stale one', async () => {
++    const { token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1 } });
++    const auth = { authorization: `Bearer ${token}` };
++    const missing = await PATCH(
++      request(product.id, { method: 'PATCH', headers: auth, body: { name: 'Cup' } }),
++      params({ id: product.id }),
++    );
++    expect(missing.status).toBe(428);
++    const stale = await PATCH(
++      request(product.id, {
++        method: 'PATCH',
++        headers: { ...auth, 'if-match': '"v99"' },
++        body: { name: 'Cup' },
++      }),
++      params({ id: product.id }),
++    );
++    expect(stale.status).toBe(412);
++  });
++});
