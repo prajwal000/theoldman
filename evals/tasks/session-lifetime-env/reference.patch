@@ -1,0 +1,124 @@
+diff --git a/.env.example b/.env.example
+index e347b07..0694127 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,2 +1,4 @@
+ # Postgres connection string for Prisma and the app.
+ DATABASE_URL=postgresql://shop:shop@localhost:5432/shop
++# How long a sign-in lasts, in whole days. Optional; defaults to 30.
++SESSION_TTL_DAYS=30
+diff --git a/README.md b/README.md
+index 28ad73e..5cf431e 100644
+--- a/README.md
++++ b/README.md
+@@ -18,9 +18,10 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ ## Environment
+ 
+-| Variable       | What                       |
+-| -------------- | -------------------------- |
+-| `DATABASE_URL` | Postgres connection string |
++| Variable           | What                                                                                      |
++| ------------------ | ----------------------------------------------------------------------------------------- |
++| `DATABASE_URL`     | Postgres connection string                                                                |
++| `SESSION_TTL_DAYS` | How long a sign-in lasts, in whole days (default 30). Any other value makes sign-in fail. |
+ 
+ ## Tests
+ 
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..2ee47fc 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -1,9 +1,9 @@
+ import { createHash, randomBytes } from 'node:crypto';
+ import bcrypt from 'bcryptjs';
+ import type { User } from '../generated/prisma/client';
++import { sessionLifetimeDays } from './config';
+ import { db } from './db';
+ 
+-const SESSION_DAYS = 30;
+ export const MIN_PASSWORD_LENGTH = 8;
+ 
+ export function hashPassword(password: string): Promise<string> {
+@@ -20,12 +20,14 @@ export function hashToken(token: string): string {
+ }
+ 
+ export async function createSession(userId: string): Promise<string> {
++  // Read before anything is written, so a bad setting creates no session.
++  const days = sessionLifetimeDays();
+   const token = randomBytes(32).toString('base64url');
+   await db.session.create({
+     data: {
+       userId,
+       tokenHash: hashToken(token),
+-      expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000),
++      expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
+     },
+   });
+   return token;
+diff --git a/src/lib/config.ts b/src/lib/config.ts
+new file mode 100644
+index 0000000..8da11f2
+--- /dev/null
++++ b/src/lib/config.ts
+@@ -0,0 +1,14 @@
++const DEFAULT_SESSION_DAYS = 30;
++
++/**
++ * How long a session lasts, in days: SESSION_TTL_DAYS, or 30 when it is not set. Any other value
++ * throws, because guessing a lifetime for a security setting is worse than failing loudly.
++ */
++export function sessionLifetimeDays(): number {
++  const value = process.env.SESSION_TTL_DAYS;
++  if (value === undefined || value === '') return DEFAULT_SESSION_DAYS;
++  if (!/^\d+$/.test(value) || Number(value) < 1) {
++    throw new Error(`SESSION_TTL_DAYS must be a positive whole number of days, not "${value}".`);
++  }
++  return Number(value);
++}
+diff --git a/test/session-lifetime.test.ts b/test/session-lifetime.test.ts
+new file mode 100644
+index 0000000..e9560bf
+--- /dev/null
++++ b/test/session-lifetime.test.ts
+@@ -0,0 +1,40 @@
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++import { POST as login } from '../src/app/api/auth/login/route';
++import { sessionLifetimeDays } from '../src/lib/config';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++beforeEach(resetDatabase);
++afterEach(() => {
++  delete process.env.SESSION_TTL_DAYS;
++});
++
++describe('session lifetime', () => {
++  it('defaults to 30 days and follows SESSION_TTL_DAYS', () => {
++    expect(sessionLifetimeDays()).toBe(30);
++    process.env.SESSION_TTL_DAYS = '7';
++    expect(sessionLifetimeDays()).toBe(7);
++  });
++
++  it.each(['0', '-1', 'abc', '2.5', '7 days'])('refuses SESSION_TTL_DAYS=%s', (value) => {
++    process.env.SESSION_TTL_DAYS = value;
++    expect(() => sessionLifetimeDays()).toThrow('SESSION_TTL_DAYS must be a positive whole number');
++  });
++
++  it('gives a new session the configured lifetime', async () => {
++    const { user } = await createUser('CUSTOMER', 'long enough password');
++    await db.session.deleteMany();
++    process.env.SESSION_TTL_DAYS = '7';
++    const response = await login(
++      jsonRequest('/api/auth/login', {
++        body: { email: user.email, password: 'long enough password' },
++      }),
++    );
++    expect(response.status).toBe(200);
++    const session = await db.session.findFirstOrThrow({ where: { userId: user.id } });
++    expect(session.expiresAt.getTime() - Date.now()).toBeGreaterThan(7 * DAY_MS - 60_000);
++    expect(session.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(7 * DAY_MS);
++  });
++});

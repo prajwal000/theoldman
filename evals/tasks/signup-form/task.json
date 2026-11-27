@@ -1,0 +1,7 @@
+{
+  "title": "Sign-up form with validation",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

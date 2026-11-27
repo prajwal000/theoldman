@@ -1,0 +1,8 @@
+{
+  "title": "Fix customers seeing other customers' orders",
+  "base": "next-prisma",
+  "starter": "starter",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

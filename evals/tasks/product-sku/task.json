@@ -1,0 +1,7 @@
+{
+  "title": "Required SKU on products, with a migration for existing data",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}
