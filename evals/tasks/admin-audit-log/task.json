@@ -1,0 +1,7 @@
+{
+  "title": "Audit log of admin actions",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

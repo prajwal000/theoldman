@@ -1,0 +1,7 @@
+{
+  "title": "Account deletion that keeps anonymised orders",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

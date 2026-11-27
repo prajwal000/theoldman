@@ -1,0 +1,179 @@
+diff --git a/README.md b/README.md
+index 28ad73e..a9dcfa3 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                        | What                                                                                                                                                                   |
++| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`      | Create an account: `email`, `name`, `password`.                                                                                                                        |
++| `POST /api/auth/login`       | Sign in: `email`, `password`.                                                                                                                                          |
++| `GET /api/users/me`          | The signed-in user.                                                                                                                                                    |
++| `GET /api/products`          | All products, newest first.                                                                                                                                            |
++| `POST /api/products`         | Add a product (admin): `name`, `priceCents`.                                                                                                                           |
++| `GET /api/products/:id`      | One product.                                                                                                                                                           |
++| `DELETE /api/products/:id`   | Delete a product (admin).                                                                                                                                              |
++| `GET /api/orders`            | The signed-in user's orders.                                                                                                                                           |
++| `POST /api/orders`           | Order a product: `productId`, `quantity`.                                                                                                                              |
++| `GET /api/admin/sales/daily` | Paid orders and revenue for one calendar day (admin): `date` (YYYY-MM-DD) and `tz` (IANA zone, default `UTC`). Days around daylight saving changes are 23 or 25 hours. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/sales/daily/route.ts b/src/app/api/admin/sales/daily/route.ts
+new file mode 100644
+index 0000000..a81357e
+--- /dev/null
++++ b/src/app/api/admin/sales/daily/route.ts
+@@ -0,0 +1,29 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++import { dayInZone, isTimeZone } from '../../../../../lib/zoned-day';
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'admins only');
++
++  const query = new URL(request.url).searchParams;
++  const date = query.get('date') ?? '';
++  const tz = query.get('tz') ?? 'UTC';
++  if (!isTimeZone(tz)) return jsonError(400, `unknown time zone "${tz}"`);
++  const day = dayInZone(date, tz);
++  if (day === null) return jsonError(400, 'date must be a real date as YYYY-MM-DD');
++
++  const totals = await db.order.aggregate({
++    where: { status: 'PAID', createdAt: { gte: day.start, lt: day.end } },
++    _count: { _all: true },
++    _sum: { totalCents: true },
++  });
++  return Response.json({
++    date,
++    tz,
++    orders: totals._count._all,
++    revenueCents: totals._sum.totalCents ?? 0,
++  });
++}
+diff --git a/src/lib/zoned-day.ts b/src/lib/zoned-day.ts
+new file mode 100644
+index 0000000..02ef3a2
+--- /dev/null
++++ b/src/lib/zoned-day.ts
+@@ -0,0 +1,64 @@
++// The UTC instants where a calendar day starts and ends in an IANA time zone, from the built-in
++// Intl data. A day is not always 24 hours: it is 23 or 25 on daylight saving changes, so the end
++// is the next day's local midnight, never start + 24 h.
++
++const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
++
++/** Whether Intl knows the time zone. */
++export function isTimeZone(timeZone: string): boolean {
++  try {
++    new Intl.DateTimeFormat('en-US', { timeZone });
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++/** The zone's offset from UTC at an instant, in milliseconds. */
++function offsetMs(instant: number, timeZone: string): number {
++  const parts = new Intl.DateTimeFormat('en-US', {
++    timeZone,
++    hourCycle: 'h23',
++    year: 'numeric',
++    month: 'numeric',
++    day: 'numeric',
++    hour: 'numeric',
++    minute: 'numeric',
++    second: 'numeric',
++  }).formatToParts(new Date(instant));
++  const part = (type: Intl.DateTimeFormatPartTypes): number =>
++    Number(parts.find((p) => p.type === type)?.value);
++  const local = Date.UTC(
++    part('year'),
++    part('month') - 1,
++    part('day'),
++    part('hour'),
++    part('minute'),
++    part('second'),
++  );
++  return local - (instant - (instant % 1000));
++}
++
++/** The UTC instant of local midnight at the start of the given date. */
++function localMidnight(year: number, month: number, day: number, timeZone: string): number {
++  const wallClock = Date.UTC(year, month - 1, day);
++  const first = wallClock - offsetMs(wallClock, timeZone);
++  // The offset at the answer can differ from the one at the guess when a change falls in between.
++  return wallClock - offsetMs(first, timeZone);
++}
++
++/** [start, end) of `date` (YYYY-MM-DD) in `timeZone`, or null for a date that does not exist. */
++export function dayInZone(date: string, timeZone: string): { start: Date; end: Date } | null {
++  const match = DATE.exec(date);
++  if (match === null) return null;
++  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
++  const check = new Date(Date.UTC(year, month - 1, day));
++  if (check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null;
++  const next = new Date(Date.UTC(year, month - 1, day + 1));
++  return {
++    start: new Date(localMidnight(year, month, day, timeZone)),
++    end: new Date(
++      localMidnight(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), timeZone),
++    ),
++  };
++}
+diff --git a/test/zoned-day.test.ts b/test/zoned-day.test.ts
+new file mode 100644
+index 0000000..d9702fd
+--- /dev/null
++++ b/test/zoned-day.test.ts
+@@ -0,0 +1,35 @@
++import { describe, expect, it } from 'vitest';
++import { dayInZone, isTimeZone } from '../src/lib/zoned-day';
++
++const bounds = (date: string, tz: string) => {
++  const day = dayInZone(date, tz);
++  return day === null ? null : [day.start.toISOString(), day.end.toISOString()];
++};
++
++describe('dayInZone', () => {
++  it('handles ordinary days and both daylight saving changes', () => {
++    expect(bounds('2026-01-15', 'UTC')).toEqual([
++      '2026-01-15T00:00:00.000Z',
++      '2026-01-16T00:00:00.000Z',
++    ]);
++    expect(bounds('2026-03-29', 'Europe/Berlin')).toEqual([
++      '2026-03-28T23:00:00.000Z',
++      '2026-03-29T22:00:00.000Z',
++    ]);
++    expect(bounds('2026-11-01', 'America/New_York')).toEqual([
++      '2026-11-01T04:00:00.000Z',
++      '2026-11-02T05:00:00.000Z',
++    ]);
++    expect(bounds('2026-12-31', 'Asia/Kolkata')).toEqual([
++      '2026-12-30T18:30:00.000Z',
++      '2026-12-31T18:30:00.000Z',
++    ]);
++  });
++
++  it('rejects dates that do not exist and unknown zones', () => {
++    expect(dayInZone('2026-02-30', 'UTC')).toBeNull();
++    expect(dayInZone('2026-3-1', 'UTC')).toBeNull();
++    expect(isTimeZone('Europe/Berlin')).toBe(true);
++    expect(isTimeZone('Mars/Olympus_Mons')).toBe(false);
++  });
++});

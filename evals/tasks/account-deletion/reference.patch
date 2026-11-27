@@ -1,0 +1,141 @@
+diff --git a/README.md b/README.md
+index 28ad73e..4d19005 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                                          |
++| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                               |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                                 |
++| `GET /api/users/me`        | The signed-in user.                                                                                                           |
++| `DELETE /api/users/me`     | Delete your account: `password`. Removes your name, email and password and signs you out everywhere; orders stay, anonymised. |
++| `GET /api/products`        | All products, newest first.                                                                                                   |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                                  |
++| `GET /api/products/:id`    | One product.                                                                                                                  |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                                                     |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                                  |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                                     |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127115230_user_deleted_at/migration.sql b/prisma/migrations/20261127115230_user_deleted_at/migration.sql
+new file mode 100644
+index 0000000..52261bb
+--- /dev/null
++++ b/prisma/migrations/20261127115230_user_deleted_at/migration.sql
+@@ -0,0 +1,2 @@
++-- AlterTable
++ALTER TABLE "User" ADD COLUMN     "deletedAt" TIMESTAMP(3);
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..ba36381 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -25,6 +25,8 @@ model User {
+   passwordHash String
+   role         Role      @default(CUSTOMER)
+   createdAt    DateTime  @default(now())
++  /// Set when the account is deleted; the row stays, anonymised, so orders keep a valid link.
++  deletedAt    DateTime?
+   sessions     Session[]
+   orders       Order[]
+ }
+diff --git a/src/app/api/users/me/route.ts b/src/app/api/users/me/route.ts
+index e86341b..df547b1 100644
+--- a/src/app/api/users/me/route.ts
++++ b/src/app/api/users/me/route.ts
+@@ -1,8 +1,39 @@
+-import { getCurrentUser, publicUser } from '../../../../lib/auth';
+-import { jsonError } from '../../../../lib/http';
++import { getCurrentUser, publicUser, verifyPassword } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
+ 
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+   return Response.json({ user: publicUser(user) });
+ }
++
++/**
++ * Deletes the account: personal data is overwritten in place and every session ends. The row
++ * itself stays so orders keep their history for accounting, linked only to an anonymous user.
++ */
++export async function DELETE(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  const body = await readJson(request);
++  const password = isRecord(body) ? body.password : undefined;
++  if (typeof password !== 'string' || !(await verifyPassword(password, user.passwordHash))) {
++    return jsonError(403, 'deleting the account needs your password');
++  }
++
++  await db.$transaction([
++    db.user.update({
++      where: { id: user.id },
++      data: {
++        // The .invalid domain can never receive mail, and the id keeps the email unique.
++        email: `deleted-${user.id}@deleted.invalid`,
++        name: 'Deleted user',
++        // Not a bcrypt hash, so no password can ever match it.
++        passwordHash: '!',
++        deletedAt: new Date(),
++      },
++    }),
++    db.session.deleteMany({ where: { userId: user.id } }),
++  ]);
++  return new Response(null, { status: 204 });
++}
+diff --git a/test/account-deletion.test.ts b/test/account-deletion.test.ts
+new file mode 100644
+index 0000000..49f23c8
+--- /dev/null
++++ b/test/account-deletion.test.ts
+@@ -0,0 +1,35 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as signup } from '../src/app/api/auth/signup/route';
++import { DELETE, GET } from '../src/app/api/users/me/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const remove = (token: string, body: unknown) =>
++  DELETE(jsonRequest('/api/users/me', { method: 'DELETE', body, token }));
++
++describe('account deletion', () => {
++  it('needs the password', async () => {
++    const { token } = await createUser('CUSTOMER', 'my password');
++    expect((await remove(token, {})).status).toBe(403);
++    expect((await remove(token, { password: 'wrong' })).status).toBe(403);
++    expect((await GET(jsonRequest('/api/users/me', { token }))).status).toBe(200);
++  });
++
++  it('removes personal data and sessions but keeps orders', async () => {
++    const { user, token } = await createUser('CUSTOMER', 'my password');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1 } });
++    const order = await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 1, totalCents: 1 },
++    });
++
++    expect((await remove(token, { password: 'my password' })).status).toBe(204);
++    expect((await GET(jsonRequest('/api/users/me', { token }))).status).toBe(401);
++    expect(await db.user.count({ where: { email: user.email } })).toBe(0);
++    expect(await db.order.count({ where: { id: order.id } })).toBe(1);
++
++    const again = { email: user.email, name: 'New me', password: 'another password' };
++    expect((await signup(jsonRequest('/api/auth/signup', { body: again }))).status).toBe(201);
++  });
++});

@@ -1,0 +1,154 @@
+diff --git a/README.md b/README.md
+index 28ad73e..32c43d6 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                        |
++| -------------------------- | ------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                             |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                               |
++| `GET /api/users/me`        | The signed-in user.                                                                         |
++| `GET /api/products`        | All products, newest first.                                                                 |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                |
++| `GET /api/products/:id`    | One product.                                                                                |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                   |
++| `GET /api/orders`          | The signed-in user's orders.                                                                |
++| `GET /api/orders/export`   | The signed-in user's orders as a CSV download (`orders.csv`), safe to open in spreadsheets. |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                   |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/export/route.ts b/src/app/api/orders/export/route.ts
+new file mode 100644
+index 0000000..e30d842
+--- /dev/null
++++ b/src/app/api/orders/export/route.ts
+@@ -0,0 +1,33 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { toCsv } from '../../../../lib/csv';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++const HEADER = ['order_id', 'date', 'product', 'quantity', 'total', 'status'];
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const orders = await db.order.findMany({
++    where: { userId: user.id },
++    include: { product: { select: { name: true } } },
++    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
++  });
++  const rows = orders.map((order) => [
++    order.id,
++    order.createdAt.toISOString(),
++    order.product.name,
++    order.quantity,
++    // Integer cents to a fixed two-decimal string, with no floating-point rounding on the way.
++    `${String(Math.trunc(order.totalCents / 100))}.${String(order.totalCents % 100).padStart(2, '0')}`,
++    order.status,
++  ]);
++  return new Response(toCsv([HEADER, ...rows]), {
++    headers: {
++      'Content-Type': 'text/csv; charset=utf-8',
++      'Content-Disposition': 'attachment; filename="orders.csv"',
++      'Cache-Control': 'private, no-store',
++    },
++  });
++}
+diff --git a/src/lib/csv.ts b/src/lib/csv.ts
+new file mode 100644
+index 0000000..5cf7b97
+--- /dev/null
++++ b/src/lib/csv.ts
+@@ -0,0 +1,12 @@
++// Spreadsheets run text starting with these as a formula (CSV injection), so it gets an apostrophe.
++const FORMULA_START = /^[=+\-@\t\r]/;
++
++export function csvField(value: string | number): string {
++  if (typeof value === 'number') return String(value);
++  const text = FORMULA_START.test(value) ? `'${value}` : value;
++  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
++}
++
++export function toCsv(rows: readonly (readonly (string | number)[])[]): string {
++  return rows.map((row) => row.map(csvField).join(',')).join('\r\n') + '\r\n';
++}
+diff --git a/test/csv-export.test.ts b/test/csv-export.test.ts
+new file mode 100644
+index 0000000..f768436
+--- /dev/null
++++ b/test/csv-export.test.ts
+@@ -0,0 +1,58 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/export/route';
++import { csvField, toCsv } from '../src/lib/csv';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('csv', () => {
++  it('quotes commas, quotes and line breaks', () => {
++    expect(csvField('plain')).toBe('plain');
++    expect(csvField('a,b')).toBe('"a,b"');
++    expect(csvField('say "hi"')).toBe('"say ""hi"""');
++    expect(csvField('two\nlines')).toBe('"two\nlines"');
++    expect(
++      toCsv([
++        ['a', 1],
++        ['b', 2],
++      ]),
++    ).toBe('a,1\r\nb,2\r\n');
++  });
++
++  it('keeps spreadsheets from running text as a formula', () => {
++    expect(csvField('=1+1')).toBe("'=1+1");
++    expect(csvField('@SUM(A1)')).toBe("'@SUM(A1)");
++    expect(csvField('-2')).toBe("'-2");
++    expect(csvField('+cmd')).toBe("'+cmd");
++    expect(csvField(-2)).toBe('-2');
++  });
++});
++
++describe('order export', () => {
++  it("exports the signed-in customer's orders, newest first", async () => {
++    const { user, token } = await createUser();
++    const other = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug, large', priceCents: 1205 } });
++    await db.order.create({
++      data: {
++        userId: user.id,
++        productId: product.id,
++        quantity: 2,
++        totalCents: 2410,
++        createdAt: new Date('2026-01-02T03:04:05.000Z'),
++      },
++    });
++    await db.order.create({
++      data: { userId: other.user.id, productId: product.id, quantity: 1, totalCents: 1205 },
++    });
++
++    const response = await GET(jsonRequest('/api/orders/export', { token }));
++    expect(response.headers.get('content-type')).toMatch(/^text\/csv/);
++    expect(response.headers.get('content-disposition')).toBe('attachment; filename="orders.csv"');
++    const lines = (await response.text()).trimEnd().split('\r\n');
++    expect(lines[0]).toBe('order_id,date,product,quantity,total,status');
++    expect(lines).toHaveLength(2);
++    expect(lines[1]).toMatch(/,2026-01-02T03:04:05\.000Z,"Mug, large",2,24\.10,PENDING$/);
++  });
++});

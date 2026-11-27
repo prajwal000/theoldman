@@ -1,0 +1,7 @@
+{
+  "title": "Stock levels that never oversell",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

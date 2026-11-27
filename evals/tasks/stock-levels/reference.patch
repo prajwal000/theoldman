@@ -1,0 +1,158 @@
+diff --git a/README.md b/README.md
+index 28ad73e..c6fe768 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                   |
++| -------------------------- | ------------------------------------------------------------------------------------------------------ |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                        |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                          |
++| `GET /api/users/me`        | The signed-in user.                                                                                    |
++| `GET /api/products`        | All products, newest first.                                                                            |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`, optional `stock` (default 0).                             |
++| `GET /api/products/:id`    | One product.                                                                                           |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                              |
++| `GET /api/orders`          | The signed-in user's orders.                                                                           |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`. Takes the quantity from stock; 409 when there is not enough. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127115054_product_stock/migration.sql b/prisma/migrations/20261127115054_product_stock/migration.sql
+new file mode 100644
+index 0000000..792c37a
+--- /dev/null
++++ b/prisma/migrations/20261127115054_product_stock/migration.sql
+@@ -0,0 +1,5 @@
++-- AlterTable
++ALTER TABLE "Product" ADD COLUMN     "stock" INTEGER NOT NULL DEFAULT 0;
++
++-- Stock can never go below zero, whatever the application does.
++ALTER TABLE "Product" ADD CONSTRAINT "Product_stock_not_negative" CHECK ("stock" >= 0);
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..be09c9a 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -42,6 +42,8 @@ model Product {
+   id         String   @id @default(cuid())
+   name       String
+   priceCents Int
++  /// Units in stock; a database check keeps it from going below zero.
++  stock      Int      @default(0)
+   createdAt  DateTime @default(now())
+   orders     Order[]
+ }
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..368cc23 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -30,13 +30,23 @@ export async function POST(request: Request): Promise<Response> {
+   const product = await db.product.findUnique({ where: { id: body.productId } });
+   if (product === null) return jsonError(404, 'product not found');
+ 
+-  const order = await db.order.create({
+-    data: {
+-      userId: user.id,
+-      productId: product.id,
+-      quantity: body.quantity,
+-      totalCents: product.priceCents * body.quantity,
+-    },
++  const quantity = body.quantity;
++  const order = await db.$transaction(async (tx) => {
++    // One conditional update takes the stock, so concurrent orders cannot both take the last unit.
++    const taken = await tx.product.updateMany({
++      where: { id: product.id, stock: { gte: quantity } },
++      data: { stock: { decrement: quantity } },
++    });
++    if (taken.count === 0) return null;
++    return tx.order.create({
++      data: {
++        userId: user.id,
++        productId: product.id,
++        quantity,
++        totalCents: product.priceCents * quantity,
++      },
++    });
+   });
++  if (order === null) return jsonError(409, 'not enough stock');
+   return Response.json(order, { status: 201 });
+ }
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..b5332f3 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -23,8 +23,12 @@ export async function POST(request: Request): Promise<Response> {
+   ) {
+     return jsonError(400, 'name and a whole, non-negative priceCents are required');
+   }
++  const stock = body.stock ?? 0;
++  if (typeof stock !== 'number' || !Number.isInteger(stock) || stock < 0) {
++    return jsonError(400, 'stock must be a whole, non-negative number');
++  }
+   const product = await db.product.create({
+-    data: { name: body.name.trim(), priceCents: body.priceCents },
++    data: { name: body.name.trim(), priceCents: body.priceCents, stock },
+   });
+   return Response.json(product, { status: 201 });
+ }
+diff --git a/test/stock.test.ts b/test/stock.test.ts
+new file mode 100644
+index 0000000..27e2cd4
+--- /dev/null
++++ b/test/stock.test.ts
+@@ -0,0 +1,43 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as placeOrder } from '../src/app/api/orders/route';
++import { POST as addProduct } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const order = (token: string, productId: string, quantity: number) =>
++  placeOrder(jsonRequest('/api/orders', { body: { productId, quantity }, token }));
++
++describe('stock', () => {
++  it('sets stock on new products and rejects bad values', async () => {
++    const { token } = await createUser('ADMIN');
++    const add = (body: Record<string, unknown>) =>
++      addProduct(
++        jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1, ...body }, token }),
++      );
++    expect(await (await add({ stock: 5 })).json()).toMatchObject({ stock: 5 });
++    expect(await (await add({})).json()).toMatchObject({ stock: 0 });
++    expect((await add({ stock: -1 })).status).toBe(400);
++    expect((await add({ stock: 1.5 })).status).toBe(400);
++  });
++
++  it('takes stock when ordering and refuses more than is left', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1, stock: 5 } });
++    expect((await order(token, product.id, 2)).status).toBe(201);
++    expect((await order(token, product.id, 4)).status).toBe(409);
++    expect((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock).toBe(3);
++    expect(await db.order.count()).toBe(1);
++  });
++
++  it('never sells more than is in stock under concurrent orders', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1, stock: 3 } });
++    const statuses = await Promise.all(
++      Array.from({ length: 10 }, async () => (await order(token, product.id, 1)).status),
++    );
++    expect(statuses.filter((status) => status === 201)).toHaveLength(3);
++    expect((await db.product.findUniqueOrThrow({ where: { id: product.id } })).stock).toBe(0);
++  });
++});

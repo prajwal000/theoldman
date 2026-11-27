@@ -1,0 +1,225 @@
+diff --git a/README.md b/README.md
+index 28ad73e..a407967 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                                                                            |
++| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                                                                 |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                                                                   |
++| `GET /api/users/me`        | The signed-in user.                                                                                                                                             |
++| `GET /api/products`        | All products, newest first.                                                                                                                                     |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                                                                    |
++| `GET /api/products/:id`    | One product.                                                                                                                                                    |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                                                                                       |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                                                                    |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                                                                       |
++| `GET /api/admin/audit-log` | The last 100 admin actions, newest first (admin): `actorId`, `action` (`product.create`, `product.delete`), `targetId`, `createdAt`. Entries cannot be changed. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127115205_audit_log/migration.sql b/prisma/migrations/20261127115205_audit_log/migration.sql
+new file mode 100644
+index 0000000..0bbb540
+--- /dev/null
++++ b/prisma/migrations/20261127115205_audit_log/migration.sql
+@@ -0,0 +1,13 @@
++-- CreateTable
++CREATE TABLE "AuditLog" (
++    "id" TEXT NOT NULL,
++    "actorId" TEXT NOT NULL,
++    "action" TEXT NOT NULL,
++    "targetId" TEXT NOT NULL,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
++);
++
++-- CreateIndex
++CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt");
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..1d0a188 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -38,6 +38,18 @@ model Session {
+   createdAt DateTime @default(now())
+ }
+ 
++/// What admins did, for accountability. Append-only: no route edits or deletes entries. Ids are
++/// plain strings, not relations, so entries outlive the users and products they name.
++model AuditLog {
++  id        String   @id @default(cuid())
++  actorId   String
++  action    String
++  targetId  String
++  createdAt DateTime @default(now())
++
++  @@index([createdAt])
++}
++
+ model Product {
+   id         String   @id @default(cuid())
+   name       String
+diff --git a/src/app/api/admin/audit-log/route.ts b/src/app/api/admin/audit-log/route.ts
+new file mode 100644
+index 0000000..7abe61d
+--- /dev/null
++++ b/src/app/api/admin/audit-log/route.ts
+@@ -0,0 +1,18 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++const MAX_ENTRIES = 100;
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'admins only');
++
++  const entries = await db.auditLog.findMany({
++    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
++    take: MAX_ENTRIES,
++    select: { id: true, actorId: true, action: true, targetId: true, createdAt: true },
++  });
++  return Response.json({ entries });
++}
+diff --git a/src/app/api/products/[id]/route.ts b/src/app/api/products/[id]/route.ts
+index c357885..4b5aaf9 100644
+--- a/src/app/api/products/[id]/route.ts
++++ b/src/app/api/products/[id]/route.ts
+@@ -1,3 +1,4 @@
++import { audit } from '../../../../lib/audit';
+ import { getCurrentUser } from '../../../../lib/auth';
+ import { db } from '../../../../lib/db';
+ import { jsonError } from '../../../../lib/http';
+@@ -19,7 +20,12 @@ export async function DELETE(request: Request, { params }: Context): Promise<Res
+   if (user.role !== 'ADMIN') return jsonError(403, 'only admins can delete products');
+ 
+   const { id } = await params;
+-  const { count } = await db.product.deleteMany({ where: { id } });
+-  if (count === 0) return jsonError(404, 'product not found');
++  const deleted = await db.$transaction(async (tx) => {
++    const { count } = await tx.product.deleteMany({ where: { id } });
++    if (count === 0) return false;
++    await audit(tx, user.id, 'product.delete', id);
++    return true;
++  });
++  if (!deleted) return jsonError(404, 'product not found');
+   return new Response(null, { status: 204 });
+ }
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..602c9e7 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -1,3 +1,4 @@
++import { audit } from '../../../lib/audit';
+ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+@@ -23,8 +24,11 @@ export async function POST(request: Request): Promise<Response> {
+   ) {
+     return jsonError(400, 'name and a whole, non-negative priceCents are required');
+   }
+-  const product = await db.product.create({
+-    data: { name: body.name.trim(), priceCents: body.priceCents },
++  const data = { name: body.name.trim(), priceCents: body.priceCents };
++  const product = await db.$transaction(async (tx) => {
++    const created = await tx.product.create({ data });
++    await audit(tx, user.id, 'product.create', created.id);
++    return created;
+   });
+   return Response.json(product, { status: 201 });
+ }
+diff --git a/src/lib/audit.ts b/src/lib/audit.ts
+new file mode 100644
+index 0000000..8350f88
+--- /dev/null
++++ b/src/lib/audit.ts
+@@ -0,0 +1,16 @@
++import type { Prisma } from '../generated/prisma/client';
++
++export type AuditAction = 'product.create' | 'product.delete';
++
++/**
++ * Records an admin action. Pass the transaction that performs the action, so an entry exists
++ * exactly when the action happened.
++ */
++export async function audit(
++  tx: Prisma.TransactionClient,
++  actorId: string,
++  action: AuditAction,
++  targetId: string,
++): Promise<void> {
++  await tx.auditLog.create({ data: { actorId, action, targetId } });
++}
+diff --git a/test/audit-log.test.ts b/test/audit-log.test.ts
+new file mode 100644
+index 0000000..831f573
+--- /dev/null
++++ b/test/audit-log.test.ts
+@@ -0,0 +1,51 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET as auditLog } from '../src/app/api/admin/audit-log/route';
++import { DELETE } from '../src/app/api/products/[id]/route';
++import { POST } from '../src/app/api/products/route';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++interface Entry {
++  actorId: string;
++  action: string;
++  targetId: string;
++}
++
++async function entries(token: string): Promise<Entry[]> {
++  const response = await auditLog(jsonRequest('/api/admin/audit-log', { token }));
++  return ((await response.json()) as { entries: Entry[] }).entries;
++}
++
++describe('audit log', () => {
++  it('records product creation and deletion, newest first', async () => {
++    const { user, token } = await createUser('ADMIN');
++    const created = await POST(
++      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1 }, token }),
++    );
++    const { id } = (await created.json()) as { id: string };
++    await DELETE(jsonRequest(`/api/products/${id}`, { method: 'DELETE', token }), params({ id }));
++
++    expect(await entries(token)).toMatchObject([
++      { actorId: user.id, action: 'product.delete', targetId: id },
++      { actorId: user.id, action: 'product.create', targetId: id },
++    ]);
++  });
++
++  it('records nothing for actions that did not happen', async () => {
++    const admin = await createUser('ADMIN');
++    const customer = await createUser();
++    await DELETE(
++      jsonRequest('/api/products/missing', { method: 'DELETE', token: admin.token }),
++      params({ id: 'missing' }),
++    );
++    await POST(
++      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1 }, token: customer.token }),
++    );
++    expect(await entries(admin.token)).toEqual([]);
++    const forbidden = await auditLog(
++      jsonRequest('/api/admin/audit-log', { token: customer.token }),
++    );
++    expect(forbidden.status).toBe(403);
++  });
++});
