@@ -142,7 +142,7 @@
             "tscErrors": { "$ref": "#/$defs/stats" },
             "eslintErrors": { "$ref": "#/$defs/stats" },
             "semgrepFindings": {
-              "description": "Semgrep findings (pinned semgrep-rules, JavaScript and TypeScript) on lines the run added.",
+              "description": "Semgrep findings from security rules (pinned semgrep-rules, JavaScript and TypeScript) on lines the run added.",
               "$ref": "#/$defs/stats"
             },
             "gitleaksFindings": {

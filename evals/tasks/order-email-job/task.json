@@ -1,0 +1,7 @@
+{
+  "title": "Order confirmation emails from a background job",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

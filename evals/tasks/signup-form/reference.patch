@@ -1,0 +1,237 @@
+diff --git a/README.md b/README.md
+index 28ad73e..d982d8b 100644
+--- a/README.md
++++ b/README.md
+@@ -26,6 +26,10 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ `npm test` runs the Vitest suite in `test/` against `DATABASE_URL`. It empties the tables between tests, so point it at a database you can throw away. `npm run lint` and `npm run typecheck` check the code.
+ 
++## Pages
++
++- `/signup`: the sign-up form (`src/components/SignupForm.tsx`). It checks the fields before sending and shows the server's error if signup fails.
++
+ ## API
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+diff --git a/src/app/signup/page.tsx b/src/app/signup/page.tsx
+new file mode 100644
+index 0000000..160bff9
+--- /dev/null
++++ b/src/app/signup/page.tsx
+@@ -0,0 +1,18 @@
++'use client';
++
++import { useRouter } from 'next/navigation';
++import SignupForm from '../../components/SignupForm';
++
++export default function SignupPage() {
++  const router = useRouter();
++  return (
++    <main>
++      <h1>Create an account</h1>
++      <SignupForm
++        onSignedUp={() => {
++          router.push('/');
++        }}
++      />
++    </main>
++  );
++}
+diff --git a/src/components/SignupForm.tsx b/src/components/SignupForm.tsx
+new file mode 100644
+index 0000000..493ec73
+--- /dev/null
++++ b/src/components/SignupForm.tsx
+@@ -0,0 +1,129 @@
++'use client';
++
++import { type FormEvent, useId, useState } from 'react';
++
++export interface SignupResult {
++  readonly token: string;
++  readonly user: { readonly id: string; readonly email: string; readonly name: string };
++}
++
++interface Fields {
++  name: string;
++  email: string;
++  password: string;
++  confirmPassword: string;
++}
++
++type Errors = Partial<Record<keyof Fields, string>>;
++
++const MIN_PASSWORD_LENGTH = 8;
++const EMAIL = /^[^\s@]+@[^\s@]+$/;
++
++// The same rules the signup route applies, checked first so most mistakes need no round trip.
++function validate(fields: Fields): Errors {
++  const errors: Errors = {};
++  if (fields.name.trim() === '') errors.name = 'Enter your name.';
++  if (!EMAIL.test(fields.email.trim())) errors.email = 'Enter a valid email address.';
++  if (fields.password.length < MIN_PASSWORD_LENGTH) {
++    errors.password = `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
++  }
++  if (fields.confirmPassword !== fields.password) {
++    errors.confirmPassword = 'The passwords do not match.';
++  }
++  return errors;
++}
++
++function isSignupResult(value: unknown): value is SignupResult {
++  if (typeof value !== 'object' || value === null) return false;
++  if (!('token' in value) || !('user' in value)) return false;
++  return typeof value.token === 'string' && typeof value.user === 'object' && value.user !== null;
++}
++
++function serverMessage(value: unknown): string {
++  if (typeof value === 'object' && value !== null && 'error' in value) {
++    if (typeof value.error === 'string' && value.error !== '') return value.error;
++  }
++  return 'Sign-up failed. Try again.';
++}
++
++export default function SignupForm({ onSignedUp }: { onSignedUp: (result: SignupResult) => void }) {
++  const id = useId();
++  const [fields, setFields] = useState<Fields>({
++    name: '',
++    email: '',
++    password: '',
++    confirmPassword: '',
++  });
++  const [errors, setErrors] = useState<Errors>({});
++  const [serverError, setServerError] = useState<string | null>(null);
++  const [submitting, setSubmitting] = useState(false);
++
++  async function submit(event: FormEvent<HTMLFormElement>) {
++    event.preventDefault();
++    if (submitting) return;
++    const found = validate(fields);
++    setErrors(found);
++    if (Object.keys(found).length > 0) return;
++
++    setSubmitting(true);
++    setServerError(null);
++    try {
++      const response = await fetch('/api/auth/signup', {
++        method: 'POST',
++        headers: { 'content-type': 'application/json' },
++        body: JSON.stringify({
++          name: fields.name.trim(),
++          email: fields.email.trim(),
++          password: fields.password,
++        }),
++      });
++      const body: unknown = await response.json().catch(() => null);
++      if (!response.ok || !isSignupResult(body)) {
++        setServerError(serverMessage(body));
++        return;
++      }
++      onSignedUp(body);
++    } catch {
++      setServerError('Could not reach the server. Check your connection and try again.');
++    } finally {
++      setSubmitting(false);
++    }
++  }
++
++  function field(name: keyof Fields, label: string, type: string, autoComplete: string) {
++    const inputId = `${id}-${name}`;
++    const errorId = `${inputId}-error`;
++    const error = errors[name];
++    return (
++      <p>
++        <label htmlFor={inputId}>{label}</label>
++        <input
++          id={inputId}
++          name={name}
++          type={type}
++          autoComplete={autoComplete}
++          value={fields[name]}
++          onChange={(event) => {
++            setFields({ ...fields, [name]: event.target.value });
++          }}
++          aria-invalid={error === undefined ? undefined : true}
++          aria-describedby={error === undefined ? undefined : errorId}
++        />
++        {error !== undefined && <span id={errorId}>{error}</span>}
++      </p>
++    );
++  }
++
++  return (
++    <form onSubmit={submit} noValidate>
++      {field('name', 'Name', 'text', 'name')}
++      {field('email', 'Email', 'email', 'email')}
++      {field('password', 'Password', 'password', 'new-password')}
++      {field('confirmPassword', 'Confirm password', 'password', 'new-password')}
++      {serverError !== null && <p role="alert">{serverError}</p>}
++      <button type="submit" disabled={submitting}>
++        Sign up
++      </button>
++    </form>
++  );
++}
+diff --git a/test/signup-form.test.tsx b/test/signup-form.test.tsx
+new file mode 100644
+index 0000000..751cdca
+--- /dev/null
++++ b/test/signup-form.test.tsx
+@@ -0,0 +1,57 @@
++// @vitest-environment jsdom
++import { cleanup, render, screen } from '@testing-library/react';
++import userEvent from '@testing-library/user-event';
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import SignupForm from '../src/components/SignupForm';
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++async function fillIn(values: Partial<Record<string, string>>) {
++  const user = userEvent.setup();
++  for (const [label, value] of Object.entries(values)) {
++    if (value !== undefined && value !== '') await user.type(screen.getByLabelText(label), value);
++  }
++  await user.click(screen.getByRole('button', { name: 'Sign up' }));
++}
++
++const valid = {
++  Name: 'Ada',
++  Email: 'ada@example.com',
++  Password: 'analytical engine',
++  'Confirm password': 'analytical engine',
++};
++
++describe('SignupForm', () => {
++  it('shows errors on the invalid fields and sends nothing', async () => {
++    const fetchMock = vi.fn();
++    vi.stubGlobal('fetch', fetchMock);
++    render(<SignupForm onSignedUp={vi.fn()} />);
++    await fillIn({ ...valid, Email: 'not-an-email', 'Confirm password': 'something else' });
++    expect(screen.getByLabelText('Email').getAttribute('aria-invalid')).toBe('true');
++    expect(screen.getByLabelText('Confirm password').getAttribute('aria-invalid')).toBe('true');
++    expect(screen.getByLabelText('Name').getAttribute('aria-invalid')).toBeNull();
++    expect(fetchMock).not.toHaveBeenCalled();
++  });
++
++  it('signs up and passes the result on', async () => {
++    const result = { token: 't', user: { id: 'u1', email: 'ada@example.com', name: 'Ada' } };
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(result, { status: 201 })));
++    const onSignedUp = vi.fn();
++    render(<SignupForm onSignedUp={onSignedUp} />);
++    await fillIn(valid);
++    await vi.waitFor(() => {
++      expect(onSignedUp).toHaveBeenCalledWith(result);
++    });
++  });
++
++  it("shows the server's error", async () => {
++    const response = Response.json({ error: 'email taken' }, { status: 409 });
++    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
++    render(<SignupForm onSignedUp={vi.fn()} />);
++    await fillIn(valid);
++    expect((await screen.findByRole('alert')).textContent).toContain('email taken');
++  });
++});

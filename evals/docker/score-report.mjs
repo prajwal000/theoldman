@@ -234,7 +234,12 @@ function semgrep(paths) {
         `semgrep reported ${String(output.errors.length)} errors scanning the changed files`,
       );
     }
-    const findings = output.results.map((finding) => ({
+    // The metric is security findings: best-practice, correctness and portability rules (such as
+    // flagging every untranslated JSX string) would only add noise.
+    const security = output.results.filter(
+      (finding) => finding.extra?.metadata?.category === 'security',
+    );
+    const findings = security.map((finding) => ({
       rule: finding.check_id.replace(/^opt\.semgrep-rules\./, ''),
       path: finding.path,
       line: finding.start.line,

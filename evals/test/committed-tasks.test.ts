@@ -18,7 +18,7 @@ describe.each(ids)('task %s', (id) => {
     expect(task.prompt.length).toBeGreaterThan(100);
     expect(readFileSync(join(task.dir, 'expected.md'), 'utf8')).toMatch(/^# Expected behaviour/);
     const hidden = readdirSync(task.hiddenTestsDir, { recursive: true }).map(String);
-    expect(hidden.some((path) => /\.hidden\.test\.ts$/.test(path))).toBe(true);
+    expect(hidden.some((path) => /\.hidden\.test\.tsx?$/.test(path))).toBe(true);
   });
 
   it('keeps hidden test names apart from the starter, so copying them in replaces nothing', () => {

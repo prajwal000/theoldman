@@ -1,6 +1,6 @@
 // Security findings a run added. Semgrep runs the pinned semgrep-rules JavaScript and TypeScript
-// rules on the files the run changed, and a finding counts only if it covers a line the run
-// added, so the starter's own code never counts against either arm. gitleaks reads only the
+// rules on the files the run changed; only rules in the `security` category count, and a finding
+// counts only if it covers a line the run added, so the starter's own code never counts against either arm. gitleaks reads only the
 // run's changes, so all of its findings count. Findings carry the rule and place, never the
 // matched text, so a detected secret is never stored.
 
