@@ -7,7 +7,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
 import type { Condition } from './args.ts';
 import { claudeArgs, parseResult, PLUGIN_DIR_IN_CONTAINER, type RunResult } from './claude.ts';
-import { type DockerExec, type ExecOptions, must, pullFirst, requireDocker } from './docker.ts';
+import {
+  type DockerExec,
+  type ExecOptions,
+  InterruptedError,
+  must,
+  pullFirst,
+  requireDocker,
+} from './docker.ts';
 import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs } from './images.ts';
 import type { RunPlan } from './plan.ts';
 import type { Env, Provider } from './provider.ts';
@@ -22,6 +29,7 @@ export interface RunRecord {
   readonly wallTimeMs: number | null;
   readonly exitCode: number | null;
   readonly timedOut: boolean;
+  readonly interrupted: boolean;
   /** Pull references actually used, after any fallback to the mirror. */
   readonly images: Readonly<Record<string, string>>;
   readonly result: RunResult | null;
@@ -37,7 +45,14 @@ export interface ExecuteContext {
   readonly paths: { readonly dockerDir: string; readonly pluginDir: string };
   readonly docker: DockerExec;
   readonly clock?: () => number;
+  /**
+   * Aborted on Ctrl+C: the current step stops, its containers are still removed, and no further
+   * run starts. Removing the containers is never aborted.
+   */
+  readonly signal?: AbortSignal;
 }
+
+export const INTERRUPTED = 'interrupted (Ctrl+C)';
 
 /** Inside the agent container; Postgres is reachable under its service name. */
 export const DATABASE_URL = 'postgresql://eval:eval@postgres:5432/eval';
@@ -47,6 +62,14 @@ const BASELINE = `git init -q && git add -A && git ${GIT_IDENTITY} commit -q --a
 // theoldman keeps its session state in .theoldman/; it is not part of what Claude changed.
 const DIFF = `git add -A && git diff --cached --binary -- . ':(exclude).theoldman'`;
 
+/** Adds the run's abort signal, when there is one, to a step's options. */
+function withSignal<T extends object>(
+  ctx: ExecuteContext,
+  options: T,
+): T & { signal?: AbortSignal } {
+  return ctx.signal === undefined ? options : { ...options, signal: ctx.signal };
+}
+
 export async function executeRuns(ctx: ExecuteContext): Promise<RunRecord[]> {
   const env = dockerEnv(ctx.env, ctx.provider);
   const secrets = secretValues(ctx.env);
@@ -54,6 +77,7 @@ export async function executeRuns(ctx: ExecuteContext): Promise<RunRecord[]> {
   const images = await prepareImages(ctx, env, secrets);
   const records: RunRecord[] = [];
   for (let run = 1; run <= ctx.plan.runs; run++) {
+    if (ctx.signal?.aborted === true) break;
     records.push(await runOnce(ctx, run, images, env, secrets));
   }
   return records;
@@ -64,7 +88,7 @@ async function prepareImages(
   env: NodeJS.ProcessEnv,
   secrets: readonly string[],
 ): Promise<Record<string, string>> {
-  const node = await pullFirst(ctx.docker, imageRefs(IMAGES.node), env);
+  const node = await pullFirst(ctx.docker, imageRefs(IMAGES.node), env, ctx.signal);
   const { dockerDir } = ctx.paths;
   await must(
     ctx.docker,
@@ -81,12 +105,12 @@ async function prepareImages(
       AGENT_IMAGE,
       dockerDir,
     ],
-    { env, timeoutMs: 20 * 60_000 },
+    withSignal(ctx, { env, timeoutMs: 20 * 60_000 }),
     secrets,
   );
   const images: Record<string, string> = { node };
   if (ctx.task.services.includes('postgres')) {
-    images.postgres = await pullFirst(ctx.docker, imageRefs(IMAGES.postgres), env);
+    images.postgres = await pullFirst(ctx.docker, imageRefs(IMAGES.postgres), env, ctx.signal);
   }
   return images;
 }
@@ -125,7 +149,7 @@ async function runOnce(
     ...args,
   ];
   const step = (args: readonly string[], options: Partial<ExecOptions> = {}) =>
-    must(ctx.docker, composeArgs(args), { env: composeEnv, ...options }, secrets);
+    must(ctx.docker, composeArgs(args), withSignal(ctx, { env: composeEnv, ...options }), secrets);
 
   const startedAt = new Date(clock()).toISOString();
   let record: RunRecord = {
@@ -135,6 +159,7 @@ async function runOnce(
     wallTimeMs: null,
     exitCode: null,
     timedOut: false,
+    interrupted: false,
     images,
     result: null,
     error: null,
@@ -152,15 +177,21 @@ async function runOnce(
     const start = clock();
     const claude = await ctx.docker(
       composeArgs(['exec', '-T', ...dbEnv, 'agent', ...claudeArgs(condition)]),
-      { env: composeEnv, input: task.prompt, timeoutMs: task.timeoutMinutes * 60_000 },
+      withSignal(ctx, {
+        env: composeEnv,
+        input: task.prompt,
+        timeoutMs: task.timeoutMinutes * 60_000,
+      }),
     );
     const wallTimeMs = clock() - start;
+    const interrupted = ctx.signal?.aborted === true;
     save('transcript.jsonl', claude.stdout);
     save('stderr.log', claude.stderr);
     const parsed = parseResult(claude.stdout);
     const result = 'error' in parsed ? null : parsed;
     let error: string | null = null;
-    if (claude.timedOut)
+    if (interrupted) error = INTERRUPTED;
+    else if (claude.timedOut)
       error = `Claude Code timed out after ${String(task.timeoutMinutes)} minutes`;
     else if ('error' in parsed) error = parsed.error;
     else if (claude.code !== 0) error = `Claude Code exited with ${String(claude.code)}`;
@@ -169,17 +200,21 @@ async function runOnce(
       wallTimeMs,
       exitCode: claude.code,
       timedOut: claude.timedOut,
+      interrupted,
       result,
       error,
     };
 
-    // After a timeout Claude may still be writing, so the diff would not be the final state.
-    if (!claude.timedOut)
+    // After a timeout or Ctrl+C, Claude may still be writing, so the diff would not be final.
+    if (!claude.timedOut && !interrupted)
       save('diff.patch', (await step(['exec', '-T', 'agent', 'sh', '-c', DIFF])).stdout);
   } catch (error) {
+    const interrupted = error instanceof InterruptedError || ctx.signal?.aborted === true;
+    const message = error instanceof Error ? error.message : String(error);
     record = {
       ...record,
-      error: scrub(error instanceof Error ? error.message : String(error), secrets),
+      interrupted,
+      error: interrupted ? INTERRUPTED : scrub(message, secrets),
     };
   } finally {
     await ctx.docker(composeArgs(['down', '-v', '--remove-orphans', '-t', '0']), {

@@ -5,9 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunArgs } from '../src/args.ts';
 import { claudeArgs, PLUGIN_DIR_IN_CONTAINER } from '../src/claude.ts';
-import type { DockerExec, ExecOptions, ExecResult } from '../src/docker.ts';
+import {
+  type DockerExec,
+  type ExecOptions,
+  type ExecResult,
+  InterruptedError,
+} from '../src/docker.ts';
 import { ConfigError } from '../src/errors.ts';
-import { DATABASE_URL, executeRuns, type RunRecord } from '../src/execute.ts';
+import { DATABASE_URL, executeRuns, INTERRUPTED, type RunRecord } from '../src/execute.ts';
 import { AGENT_IMAGE, IMAGES, imageRefs } from '../src/images.ts';
 import { planRun } from '../src/plan.ts';
 import type { Env } from '../src/provider.ts';
@@ -240,6 +245,89 @@ describe('executeRuns', () => {
     for (const file of readdirSync(join(dir, 'with-1'))) {
       expect(readFileSync(join(dir, 'with-1', file), 'utf8')).not.toContain(token);
     }
+  });
+
+  it('on Ctrl+C stops the current run, removes its containers and starts no other run', async () => {
+    const controller = new AbortController();
+    const { docker, calls } = fakeDocker((args) => {
+      if (!args.includes('claude')) return undefined;
+      // What a killed `docker compose exec` returns.
+      controller.abort();
+      return { code: null, stdout: '' };
+    });
+    const planned = planRun(
+      { task: '_template', condition: 'with', runs: 3, dryRun: false, publish: false },
+      ENV,
+      { tasksDir: join(EVALS, 'tasks'), runsDir },
+    );
+    const records = await executeRuns({
+      ...planned,
+      runDir: planned.dir,
+      env: ENV,
+      paths: PATHS,
+      docker,
+      signal: controller.signal,
+    });
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ interrupted: true, error: INTERRUPTED, timedOut: false });
+    expect(existsSync(join(planned.dir, 'with-1', 'diff.patch'))).toBe(false);
+    expect(existsSync(join(planned.dir, 'with-1', 'run.json'))).toBe(true);
+    expect(calls.filter((call) => composeVerb(call) === 'up')).toHaveLength(1);
+    const downs = calls.filter((call) => composeVerb(call) === 'down');
+    expect(downs).toHaveLength(1);
+    expect(downs[0]?.signal).toBeUndefined();
+    expect(calls.find(isClaude)?.signal).toBe(controller.signal);
+  });
+
+  it('on Ctrl+C during a setup step still removes the containers', async () => {
+    const controller = new AbortController();
+    const { docker, calls } = fakeDocker((args) => {
+      if (!args.includes('cp')) return undefined;
+      controller.abort();
+      return { code: null };
+    });
+    const planned = planRun(
+      { task: '_template', condition: 'with', runs: 2, dryRun: false, publish: false },
+      ENV,
+      { tasksDir: join(EVALS, 'tasks'), runsDir },
+    );
+    const records = await executeRuns({
+      ...planned,
+      runDir: planned.dir,
+      env: ENV,
+      paths: PATHS,
+      docker,
+      signal: controller.signal,
+    });
+    expect(records).toEqual([expect.objectContaining({ interrupted: true, error: INTERRUPTED })]);
+    expect(calls.some(isClaude)).toBe(false);
+    expect(composeVerb(calls.at(-1) ?? { args: [], env: {} })).toBe('down');
+  });
+
+  it('on Ctrl+C before the image is ready starts no container', async () => {
+    const controller = new AbortController();
+    const { docker, calls } = fakeDocker((args) => {
+      if (args[0] !== 'pull') return undefined;
+      controller.abort();
+      return { code: null };
+    });
+    const planned = planRun(
+      { task: '_template', condition: 'with', runs: 1, dryRun: false, publish: false },
+      ENV,
+      { tasksDir: join(EVALS, 'tasks'), runsDir },
+    );
+    await expect(
+      executeRuns({
+        ...planned,
+        runDir: planned.dir,
+        env: ENV,
+        paths: PATHS,
+        docker,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(InterruptedError);
+    expect(calls.map((call) => call.args[0])).toEqual(['version', 'pull']);
   });
 
   it('records a timeout, skips the diff and still removes the containers', async () => {

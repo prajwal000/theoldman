@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   branchBase,
   currentBranch,
@@ -10,6 +10,10 @@ import {
   readHeadVersion,
   runGit,
 } from '../../src/lib/git.js';
+
+// Every test here starts real git processes, a dozen in some. One that takes about 1 s alone
+// took over 5 s, the default limit, while the whole suite ran on a busy Windows machine.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 beforeEach(() => {

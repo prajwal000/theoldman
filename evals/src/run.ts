@@ -5,7 +5,7 @@
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRunArgs, USAGE } from './args.ts';
-import { dockerExec } from './docker.ts';
+import { dockerExec, InterruptedError } from './docker.ts';
 import { ConfigError } from './errors.ts';
 import { executeRuns, type RunRecord } from './execute.ts';
 import { PLAN_FILE, planRun } from './plan.ts';
@@ -44,24 +44,46 @@ async function main(): Promise<void> {
     return;
   }
   process.stdout.write(`Running ${what} in Docker.\n`);
+  // Ctrl+C would otherwise end the runner at once and leave the run's containers behind.
+  const controller = new AbortController();
+  const interrupt = (): void => {
+    if (controller.signal.aborted) process.exit(INTERRUPTED_EXIT);
+    process.stderr.write(
+      '\nInterrupted: stopping the run and removing its containers. Press Ctrl+C again to quit at once.\n',
+    );
+    controller.abort();
+  };
+  process.on('SIGINT', interrupt);
+  process.on('SIGTERM', interrupt);
   const records = await executeRuns({
     ...planned,
     runDir: dir,
     env: process.env,
     paths: { dockerDir: join(evalsDir, 'docker'), pluginDir: join(repoDir, 'plugin') },
     docker: dockerExec,
+    signal: controller.signal,
   });
   for (const record of records) process.stdout.write(`${summarize(record)}\n`);
   process.stdout.write(`Saved to ${relative(repoDir, dir)}\n`);
-  if (records.some((record) => record.error !== null || record.result?.isError !== false)) {
+  if (controller.signal.aborted) process.exitCode = INTERRUPTED_EXIT;
+  else if (records.some((record) => record.error !== null || record.result?.isError !== false)) {
     process.exitCode = 1;
   }
 }
 
+// The usual exit code after Ctrl+C (128 + SIGINT).
+const INTERRUPTED_EXIT = 130;
+
 try {
   await main();
 } catch (error) {
-  if (!(error instanceof ConfigError)) throw error;
-  process.stderr.write(`eval: ${error.message}\n`);
-  process.exitCode = 1;
+  if (error instanceof InterruptedError) {
+    process.stderr.write('eval: interrupted before any run started.\n');
+    process.exitCode = INTERRUPTED_EXIT;
+  } else if (error instanceof ConfigError) {
+    process.stderr.write(`eval: ${error.message}\n`);
+    process.exitCode = 1;
+  } else {
+    throw error;
+  }
 }
