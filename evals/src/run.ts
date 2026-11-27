@@ -8,6 +8,7 @@ import { parseRunArgs, USAGE } from './args.ts';
 import { dockerExec, InterruptedError } from './docker.ts';
 import { ConfigError } from './errors.ts';
 import { executeRuns, type RunRecord } from './execute.ts';
+import { abortOnInterrupt, INTERRUPTED_EXIT } from './interrupt.ts';
 import { PLAN_FILE, planRun } from './plan.ts';
 
 const evalsDir = fileURLToPath(new URL('..', import.meta.url));
@@ -44,17 +45,7 @@ async function main(): Promise<void> {
     return;
   }
   process.stdout.write(`Running ${what} in Docker.\n`);
-  // Ctrl+C would otherwise end the runner at once and leave the run's containers behind.
-  const controller = new AbortController();
-  const interrupt = (): void => {
-    if (controller.signal.aborted) process.exit(INTERRUPTED_EXIT);
-    process.stderr.write(
-      '\nInterrupted: stopping the run and removing its containers. Press Ctrl+C again to quit at once.\n',
-    );
-    controller.abort();
-  };
-  process.on('SIGINT', interrupt);
-  process.on('SIGTERM', interrupt);
+  const controller = abortOnInterrupt();
   const records = await executeRuns({
     ...planned,
     runDir: dir,
@@ -70,9 +61,6 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
 }
-
-// The usual exit code after Ctrl+C (128 + SIGINT).
-const INTERRUPTED_EXIT = 130;
 
 try {
   await main();

@@ -1,14 +1,17 @@
-# The image Claude Code runs in for every eval run. The runner passes the base image pinned by
-# digest (evals/src/images.ts) and the Claude Code version; neither has a default, so a build
-# cannot fall back to an unpinned image or the latest release.
+# The image Claude Code runs in for every eval run, and scoring rebuilds projects in. The runner
+# passes the base image pinned by digest (evals/src/images.ts) and the npm and Claude Code
+# versions; none has a default, so a build cannot fall back to an unpinned image or release.
 ARG NODE_IMAGE
 FROM ${NODE_IMAGE}
 
 ARG CLAUDE_CODE_VERSION
+ARG NPM_VERSION
 RUN test -n "${CLAUDE_CODE_VERSION}" \
+ && test -n "${NPM_VERSION}" \
  && apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
+ && npm install -g "npm@${NPM_VERSION}" \
  && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
  && npm cache clean --force \
  && mkdir /workspace /opt/theoldman \

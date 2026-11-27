@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "eval": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/run.ts",
+    "score": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./src/ts-imports.ts src/score.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "ajv": "^8.20.0",
     "typescript": "~6.0.3",
     "vitest": "^5.1.1"
   }

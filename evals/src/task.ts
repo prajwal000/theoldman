@@ -2,6 +2,7 @@
 // project and hidden tests. The hidden tests must stay outside the starter, or Claude would see
 // them during the run.
 
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { ConfigError } from './errors.ts';
@@ -124,4 +125,21 @@ function taskFolder(
 function isInside(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
+ * SHA-256 of a folder's files: their paths (with `/`) and contents. Scoring rebuilds a run's
+ * project from the starter and the run's diff, so the plan records which starter the run used.
+ */
+export function folderHash(dir: string): string {
+  const hash = createHash('sha256');
+  const files = readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  for (const file of files) {
+    hash.update(relative(dir, file).split(sep).join('/')).update('\0');
+    hash.update(readFileSync(file)).update('\0');
+  }
+  return `sha256:${hash.digest('hex')}`;
 }

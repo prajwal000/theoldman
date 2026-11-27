@@ -2,7 +2,9 @@
 // shell. Claude Code itself only ever runs inside a container, through `docker compose exec`.
 
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { join } from 'node:path';
 import { ConfigError } from './errors.ts';
+import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs, NPM_VERSION } from './images.ts';
 import { scrub } from './secrets.ts';
 
 export interface ExecOptions {
@@ -147,4 +149,36 @@ export async function pullFirst(
     failures.push(`${ref}: ${reason ?? 'failed'}`);
   }
   throw new ConfigError(`Could not pull any of:\n${failures.join('\n')}`);
+}
+
+/**
+ * Builds the agent image (evals/docker/Dockerfile) on the pinned node image and returns the node
+ * reference it was built on. Runs and scoring both use it.
+ */
+export async function buildAgentImage(
+  docker: DockerExec,
+  dockerDir: string,
+  env: NodeJS.ProcessEnv,
+  secrets: readonly string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const node = await pullFirst(docker, imageRefs(IMAGES.node), env, signal);
+  const args = [
+    'build',
+    '-q',
+    '-f',
+    join(dockerDir, 'Dockerfile'),
+    '--build-arg',
+    `NODE_IMAGE=${node}`,
+    '--build-arg',
+    `CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}`,
+    '--build-arg',
+    `NPM_VERSION=${NPM_VERSION}`,
+    '-t',
+    AGENT_IMAGE,
+    dockerDir,
+  ];
+  const options = { env, timeoutMs: 20 * 60_000 };
+  await must(docker, args, signal === undefined ? options : { ...options, signal }, secrets);
+  return node;
 }

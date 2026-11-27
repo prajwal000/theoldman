@@ -37,10 +37,11 @@ const PROVIDER_VAR = /^(?:ANTHROPIC_|AWS_|CLAUDE_CODE_USE_|CLAUDE_CODE_OAUTH_)/;
 
 /**
  * The environment for `docker`: the runner's own, minus every provider variable except the chosen
- * provider's and the model variables, so the container gets only what the plan names.
+ * provider's and the model variables, so the container gets only what the plan names. Without a
+ * provider, as for scoring, no provider variable is kept.
  */
-export function dockerEnv(env: Env, provider: Provider): NodeJS.ProcessEnv {
-  const keep = new Set<string>([...provider.envNames, ...MODEL_VARS]);
+export function dockerEnv(env: Env, provider?: Provider): NodeJS.ProcessEnv {
+  const keep = new Set<string>(provider === undefined ? [] : [...provider.envNames, ...MODEL_VARS]);
   const result: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue;

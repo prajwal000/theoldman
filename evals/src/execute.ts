@@ -8,6 +8,7 @@ import { basename, join, sep } from 'node:path';
 import type { Condition } from './args.ts';
 import { claudeArgs, parseResult, PLUGIN_DIR_IN_CONTAINER, type RunResult } from './claude.ts';
 import {
+  buildAgentImage,
   type DockerExec,
   type ExecOptions,
   InterruptedError,
@@ -15,7 +16,7 @@ import {
   pullFirst,
   requireDocker,
 } from './docker.ts';
-import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs } from './images.ts';
+import { AGENT_IMAGE, IMAGES, imageRefs } from './images.ts';
 import type { RunPlan } from './plan.ts';
 import type { Env, Provider } from './provider.ts';
 import { dockerEnv, scrub, secretValues } from './secrets.ts';
@@ -88,26 +89,7 @@ async function prepareImages(
   env: NodeJS.ProcessEnv,
   secrets: readonly string[],
 ): Promise<Record<string, string>> {
-  const node = await pullFirst(ctx.docker, imageRefs(IMAGES.node), env, ctx.signal);
-  const { dockerDir } = ctx.paths;
-  await must(
-    ctx.docker,
-    [
-      'build',
-      '-q',
-      '-f',
-      join(dockerDir, 'Dockerfile'),
-      '--build-arg',
-      `NODE_IMAGE=${node}`,
-      '--build-arg',
-      `CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}`,
-      '-t',
-      AGENT_IMAGE,
-      dockerDir,
-    ],
-    withSignal(ctx, { env, timeoutMs: 20 * 60_000 }),
-    secrets,
-  );
+  const node = await buildAgentImage(ctx.docker, ctx.paths.dockerDir, env, secrets, ctx.signal);
   const images: Record<string, string> = { node };
   if (ctx.task.services.includes('postgres')) {
     images.postgres = await pullFirst(ctx.docker, imageRefs(IMAGES.postgres), env, ctx.signal);

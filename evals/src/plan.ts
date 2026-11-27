@@ -15,7 +15,7 @@ import {
   type ProviderAuth,
   type ProviderName,
 } from './provider.ts';
-import { loadTask, type Task } from './task.ts';
+import { folderHash, loadTask, type Task } from './task.ts';
 
 export interface RunPlan {
   readonly createdAt: string;
@@ -24,6 +24,8 @@ export interface RunPlan {
     readonly title: string;
     readonly timeoutMinutes: number;
     readonly services: readonly string[];
+    /** Which starter the run used; scoring rebuilds the run's project from it. */
+    readonly starterHash: string;
   };
   readonly condition: Condition;
   readonly runs: number;
@@ -76,6 +78,7 @@ export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Dat
       title: task.title,
       timeoutMinutes: task.timeoutMinutes,
       services: task.services,
+      starterHash: folderHash(task.starterDir),
     },
     condition: args.condition,
     runs: args.runs,

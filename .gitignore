@@ -3,5 +3,6 @@ coverage/
 .env*
 !.env.example
 evals/runs/
+evals/results/*-unpublished.json
 .theoldman/state/
 site/dist/

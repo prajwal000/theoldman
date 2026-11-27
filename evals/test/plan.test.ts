@@ -7,6 +7,7 @@ import type { RunArgs } from '../src/args.ts';
 import { ConfigError } from '../src/errors.ts';
 import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs } from '../src/images.ts';
 import { PLAN_FILE, planRun } from '../src/plan.ts';
+import { folderHash } from '../src/task.ts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
 const NOW = new Date('2026-11-27T10:15:30.123Z');
@@ -47,6 +48,7 @@ describe('planRun', () => {
         title: 'Template: add a clamp function',
         timeoutMinutes: 15,
         services: [],
+        starterHash: folderHash(join(TASKS, '_template', 'starter')),
       },
       condition: 'with',
       runs: 1,

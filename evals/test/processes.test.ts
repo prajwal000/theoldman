@@ -1,14 +1,19 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 // Claude Code runs with every permission skipped, so it must never start on the host. The
-// runner's only process is `docker`, started from one module; this keeps it that way.
+// runner's and scorer's only process is `docker`, started from one module; this keeps it that
+// way. (evals/docker/score-report.mjs starts git, npm, tsc and ESLint, but only inside the
+// scoring container.)
 const SRC = fileURLToPath(new URL('../src/', import.meta.url));
-const sources = readdirSync(SRC)
-  .filter((name) => name.endsWith('.ts'))
-  .map((name) => ({ name, text: readFileSync(join(SRC, name), 'utf8') }));
+const sources = readdirSync(SRC, { recursive: true, withFileTypes: true })
+  .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+  .map((entry) => ({
+    name: relative(SRC, join(entry.parentPath, entry.name)).split(sep).join('/'),
+    text: readFileSync(join(entry.parentPath, entry.name), 'utf8'),
+  }));
 
 describe('runner processes', () => {
   it('imports child_process only in docker.ts', () => {

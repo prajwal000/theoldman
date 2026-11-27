@@ -28,8 +28,15 @@ export const IMAGES = {
 /** Claude Code version installed in the agent image. Changing it changes what the evals measure. */
 export const CLAUDE_CODE_VERSION = '2.1.332';
 
+/**
+ * npm version installed in the agent image. The npm bundled with Node 22 (10.9) crashes with
+ * "Cannot read properties of null (reading 'edgesOut')" when installing vitest 5, in a run and
+ * when scoring alike.
+ */
+export const NPM_VERSION = '11.21.3';
+
 /** Local tag of the agent image built from evals/docker/Dockerfile on the pinned node image. */
-export const AGENT_IMAGE = `theoldman-evals-agent:claude-${CLAUDE_CODE_VERSION}-node-${IMAGES.node.tag}`;
+export const AGENT_IMAGE = `theoldman-evals-agent:claude-${CLAUDE_CODE_VERSION}-npm-${NPM_VERSION}-node-${IMAGES.node.tag}`;
 
 /** Services a task can ask for, each backed by one of the images above. */
 export const SERVICES = ['postgres'] as const;
