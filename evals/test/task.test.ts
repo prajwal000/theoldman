@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConfigError } from '../src/errors.ts';
-import { loadTask } from '../src/task.ts';
+import { folderHash, loadTask } from '../src/task.ts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
 
@@ -20,6 +20,30 @@ describe('loadTask on the committed template', () => {
     expect(task.prompt).toMatch(/^Add a `clamp\(value, min, max\)` function/);
     expect(task.starterDir).toBe(join(TASKS, '_template', 'starter'));
     expect(task.hiddenTestsDir).toBe(join(TASKS, '_template', 'hidden'));
+  });
+});
+
+describe('folderHash', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'theoldman-hash-'));
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src', 'a.ts'), 'a\n');
+    writeFileSync(join(dir, 'b.json'), '{}\n');
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is stable and changes with any path or content', () => {
+    const first = folderHash(dir);
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(folderHash(dir)).toBe(first);
+    writeFileSync(join(dir, 'src', 'a.ts'), 'a changed\n');
+    const edited = folderHash(dir);
+    expect(edited).not.toBe(first);
+    writeFileSync(join(dir, 'src', 'c.ts'), '');
+    expect(folderHash(dir)).not.toBe(edited);
   });
 });
 
