@@ -4,7 +4,17 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { ConfigError } from './errors.ts';
-import { AGENT_IMAGE, CLAUDE_CODE_VERSION, IMAGES, imageRefs, NPM_VERSION } from './images.ts';
+import {
+  AGENT_IMAGE,
+  CLAUDE_CODE_VERSION,
+  GITLEAKS,
+  IMAGES,
+  imageRefs,
+  NPM_VERSION,
+  SCORE_IMAGE,
+  SEMGREP_RULES_COMMIT,
+  SEMGREP_VERSION,
+} from './images.ts';
 import { scrub } from './secrets.ts';
 
 export interface ExecOptions {
@@ -151,11 +161,11 @@ export async function pullFirst(
   throw new ConfigError(`Could not pull any of:\n${failures.join('\n')}`);
 }
 
-/**
- * Builds the agent image (evals/docker/Dockerfile) on the pinned node image and returns the node
- * reference it was built on. Runs and scoring both use it.
- */
-export async function buildAgentImage(
+const buildArgs = (values: Readonly<Record<string, string>>): string[] =>
+  Object.entries(values).flatMap(([name, value]) => ['--build-arg', `${name}=${value}`]);
+
+async function buildImage(
+  target: 'agent' | 'score',
   docker: DockerExec,
   dockerDir: string,
   env: NodeJS.ProcessEnv,
@@ -163,22 +173,51 @@ export async function buildAgentImage(
   signal?: AbortSignal,
 ): Promise<string> {
   const node = await pullFirst(docker, imageRefs(IMAGES.node), env, signal);
+  const score = {
+    GITLEAKS_VERSION: GITLEAKS.version,
+    GITLEAKS_SHA256_AMD64: GITLEAKS.sha256.amd64,
+    GITLEAKS_SHA256_ARM64: GITLEAKS.sha256.arm64,
+    SEMGREP_VERSION,
+    SEMGREP_RULES_COMMIT,
+  };
   const args = [
     'build',
     '-q',
     '-f',
     join(dockerDir, 'Dockerfile'),
-    '--build-arg',
-    `NODE_IMAGE=${node}`,
-    '--build-arg',
-    `CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}`,
-    '--build-arg',
-    `NPM_VERSION=${NPM_VERSION}`,
+    '--target',
+    target,
+    ...buildArgs({ NODE_IMAGE: node, CLAUDE_CODE_VERSION, NPM_VERSION }),
+    ...(target === 'score' ? buildArgs(score) : []),
     '-t',
-    AGENT_IMAGE,
+    target === 'score' ? SCORE_IMAGE : AGENT_IMAGE,
     dockerDir,
   ];
   const options = { env, timeoutMs: 20 * 60_000 };
   await must(docker, args, signal === undefined ? options : { ...options, signal }, secrets);
   return node;
+}
+
+/**
+ * Builds the agent image (evals/docker/Dockerfile, target `agent`) on the pinned node image and
+ * returns the node reference it was built on.
+ */
+export function buildAgentImage(
+  docker: DockerExec,
+  dockerDir: string,
+  env: NodeJS.ProcessEnv,
+  secrets: readonly string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  return buildImage('agent', docker, dockerDir, env, secrets, signal);
+}
+
+/** Builds the scoring image (target `score`): the agent image plus Semgrep and gitleaks. */
+export function buildScoreImage(
+  docker: DockerExec,
+  dockerDir: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<string> {
+  return buildImage('score', docker, dockerDir, env, [], signal);
 }

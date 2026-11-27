@@ -58,7 +58,7 @@ async function main(): Promise<void> {
     for (const [condition, result] of Object.entries(task.conditions)) {
       const { metrics } = result;
       process.stdout.write(
-        `${task.id} ${condition}: ${String(result.runs)} runs (${String(result.failed)} failed), filler ${mean(metrics.fillerComments)}, tsc ${mean(metrics.tscErrors)}, eslint ${mean(metrics.eslintErrors)}, output tokens ${mean(metrics.outputTokens)}, $${mean(metrics.costUsd)}, ${mean(metrics.minutes)} min\n`,
+        `${task.id} ${condition}: ${String(result.runs)} runs (${String(result.failed)} failed), filler ${mean(metrics.fillerComments)}, tsc ${mean(metrics.tscErrors)}, eslint ${mean(metrics.eslintErrors)}, semgrep ${mean(metrics.semgrepFindings)}, gitleaks ${mean(metrics.gitleaksFindings)}, hidden tests ${mean(metrics.hiddenTestsPassRate)}, tests added ${mean(metrics.testsAdded)}, docs in sync ${mean(metrics.docsInSync)}, output tokens ${mean(metrics.outputTokens)}, $${mean(metrics.costUsd)}, ${mean(metrics.minutes)} min\n`,
       );
     }
   }

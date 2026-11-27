@@ -38,6 +38,27 @@ export const NPM_VERSION = '11.21.3';
 /** Local tag of the agent image built from evals/docker/Dockerfile on the pinned node image. */
 export const AGENT_IMAGE = `theoldman-evals-agent:claude-${CLAUDE_CODE_VERSION}-npm-${NPM_VERSION}-node-${IMAGES.node.tag}`;
 
+/** gitleaks release in the scoring image, with the sha256 of each Linux tarball it may use. */
+export const GITLEAKS = {
+  version: '8.30.1',
+  sha256: {
+    amd64: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb',
+    arm64: 'e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080',
+  },
+} as const;
+
+/** Semgrep release in the scoring image, from PyPI. */
+export const SEMGREP_VERSION = '1.185.0';
+
+/**
+ * Commit of github.com/semgrep/semgrep-rules whose JavaScript and TypeScript rules the Semgrep
+ * scorer runs. Changing it changes what the security scores measure.
+ */
+export const SEMGREP_RULES_COMMIT = '51e53c11a02d9ecfee2fe31b05b11ce993e16ef2';
+
+/** Local tag of the scoring image: the agent image plus Semgrep, its rules and gitleaks. */
+export const SCORE_IMAGE = `theoldman-evals-score:gitleaks-${GITLEAKS.version}-semgrep-${SEMGREP_VERSION}-rules-${SEMGREP_RULES_COMMIT.slice(0, 12)}-claude-${CLAUDE_CODE_VERSION}-node-${IMAGES.node.tag}`;
+
 /** Services a task can ask for, each backed by one of the images above. */
 export const SERVICES = ['postgres'] as const;
 export type Service = (typeof SERVICES)[number];

@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DockerExec, ExecOptions } from '../src/docker.ts';
 import { ConfigError } from '../src/errors.ts';
+import { SCORE_IMAGE, SEMGREP_RULES_COMMIT } from '../src/images.ts';
 import { validateResults } from '../src/score/results.ts';
 import { readRunFolder } from '../src/score/run-folder.ts';
 import { scoreFolders } from '../src/score/score-folders.ts';
@@ -24,8 +25,19 @@ function fakeDocker(report: Record<string, unknown> = {}) {
       const body = {
         notes: ['no eslint.config file: ESLint not run'],
         files: { 'src/math.ts': CLAMPED_MATH },
+        envExamples: {},
         tsc: { errors: 0 },
         eslint: null,
+        semgrep: { findings: [{ rule: 'eval-detected', path: 'src/math.ts', line: 5 }] },
+        gitleaks: { findings: [] },
+        tests: {
+          hidden: [HIDDEN],
+          starter: { [HIDDEN]: { passed: 0, failed: 3, skipped: 0, loaded: true } },
+          final: {
+            [HIDDEN]: { passed: 3, failed: 0, skipped: 0, loaded: true },
+            'src/math.test.ts': { passed: 2, failed: 0, skipped: 0, loaded: true },
+          },
+        },
         ...report,
       };
       return Promise.resolve({ ...ok, stdout: `${JSON.stringify(body)}\n` });
@@ -36,6 +48,7 @@ function fakeDocker(report: Record<string, unknown> = {}) {
 }
 
 const ENV = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-ant-api03-NOT-FOR-SCORING' };
+const HIDDEN = 'src/math.hidden.test.ts';
 
 describe('scoreFolders', () => {
   let root: string;
@@ -99,12 +112,73 @@ describe('scoreFolders', () => {
         fillerPer100Lines: { mean: 33.3333 },
         tscErrors: { mean: 0 },
         eslintErrors: null,
+        semgrepFindings: { mean: 1 },
+        gitleaksFindings: { mean: 0 },
+        hiddenTestsPassRate: { mean: 1 },
+        testsAdded: { mean: 2 },
+        docsFindings: { mean: 0 },
+        docsInSync: { mean: 1 },
         outputTokens: { mean: 5000 },
         minutes: { mean: 1.5 },
       },
     });
     expect(task?.conditions.without?.metrics.costUsd).toMatchObject({ mean: 0.02 });
     expect(calls.filter((call) => call.args[0] === 'run')).toHaveLength(3);
+  });
+
+  it('scores in the scoring image, built from its own Dockerfile target', async () => {
+    const { docker, calls } = fakeDocker();
+    await score([folder('w', {})], docker);
+    const build = calls.find((call) => call.args[0] === 'build')?.args ?? [];
+    expect(build.join(' ')).toContain('--target score');
+    expect(build).toContain(`SEMGREP_RULES_COMMIT=${SEMGREP_RULES_COMMIT}`);
+    expect(build).toContain(SCORE_IMAGE);
+    const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
+    expect(run).toContain(SCORE_IMAGE);
+    expect(run.join(' ')).toContain('target=/hidden,readonly');
+  });
+
+  it('refuses a task with services, which scoring cannot start yet', async () => {
+    const tasksDir = join(root, 'tasks');
+    cpSync(join(TASKS, '_template'), join(tasksDir, 'with-db'), { recursive: true });
+    writeFileSync(
+      join(tasksDir, 'with-db', 'task.json'),
+      JSON.stringify({
+        title: 'Template with a database',
+        starter: 'starter',
+        hiddenTests: 'hidden',
+        timeoutMinutes: 15,
+        services: ['postgres'],
+      }),
+    );
+    const withDb = plan();
+    withDb.task = { ...(withDb.task as object), id: 'with-db' };
+    const folders = [readRunFolder(writeRunFolder(root, 'db', withDb, [{}]))];
+    const { docker, calls } = fakeDocker();
+    await expect(
+      scoreFolders({ folders, tasksDir, dockerDir: DOCKER_DIR, env: ENV, docker }),
+    ).rejects.toThrow('db: task with-db uses postgres, and scoring does not start services yet');
+    expect(calls).toEqual([]);
+  });
+
+  it("counts docs findings on the run's diff, and a tool that could not scan as no value", async () => {
+    const diff = `diff --git a/src/config.ts b/src/config.ts
+new file mode 100644
+--- /dev/null
++++ b/src/config.ts
+@@ -0,0 +1 @@
++export const port = process.env.PORT;
+`;
+    const files = { 'src/config.ts': 'export const port = process.env.PORT;\n' };
+    const results = await score(
+      [folder('w', {}, [{ diff }])],
+      fakeDocker({ files, semgrep: null }).docker,
+    );
+    expect(results.tasks[0]?.conditions.with?.metrics).toMatchObject({
+      docsFindings: { mean: 1 },
+      docsInSync: { mean: 0 },
+      semgrepFindings: null,
+    });
   });
 
   it('gives the scoring containers no credentials', async () => {

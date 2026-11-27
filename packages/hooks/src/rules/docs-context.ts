@@ -65,13 +65,18 @@ function lineOf(file: DiffFile, matches: (text: string) => boolean): number {
   return (file.addedLines.find(({ text }) => matches(text)) ?? file.addedLines[0])?.line ?? 1;
 }
 
-function packageChanges(projectDir: string, file: DiffFile) {
-  const now = manifest(readText(join(projectDir, file.path)));
+/**
+ * The dependencies a changed package.json gained and whether its scripts changed, from its text
+ * now and before the change (undefined when it did not exist).
+ */
+export function packageChanges(
+  file: DiffFile,
+  nowText: string | undefined,
+  beforeText: string | undefined,
+): { dependencies: NewDependency[]; scripts: Located[] } {
+  const now = manifest(nowText);
   if (now === undefined) return { dependencies: [], scripts: [] };
-  const before =
-    (file.status === 'added'
-      ? undefined
-      : manifest(readHeadVersion(join(projectDir, file.path)))) ?? {};
+  const before = manifest(beforeText) ?? {};
   const old = dependencyNames(before);
   const dependencies = [...dependencyNames(now)]
     .filter((name) => !old.has(name))
@@ -113,7 +118,13 @@ export function buildDocsContext(projectDir: string, diff: string, summary = '')
   const files = parseDiff(diff);
   const packages = files
     .filter((file) => file.status !== 'deleted' && /(^|\/)package\.json$/.test(file.path))
-    .map((file) => packageChanges(projectDir, file));
+    .map((file) =>
+      packageChanges(
+        file,
+        readText(join(projectDir, file.path)),
+        file.status === 'added' ? undefined : readHeadVersion(join(projectDir, file.path)),
+      ),
+    );
   return {
     files,
     exampleVars: exampleVars(projectDir),

@@ -1,19 +1,23 @@
 // Scores run folders into one results file. All folders must have run on the same provider,
 // models and Claude Code version, with exact model IDs; each run's project is rebuilt from the
-// starter it used, in a container, and scored there and from its run.json.
+// starter it used, in a container of the scoring image, and scored from what that container
+// reports and from the run's run.json and transcript.
 
 import { join } from 'node:path';
 import type { Condition } from '../args.ts';
-import { buildAgentImage, type DockerExec, requireDocker } from '../docker.ts';
+import { buildScoreImage, type DockerExec, requireDocker } from '../docker.ts';
 import { ConfigError } from '../errors.ts';
 import { isExactModelId } from '../models.ts';
 import type { Env } from '../provider.ts';
 import { dockerEnv } from '../secrets.ts';
-import { folderHash, loadTask } from '../task.ts';
+import { folderHash, loadTask, type Task } from '../task.ts';
 import { scoreComments } from './comments.ts';
+import { scoreDocs } from './docs.ts';
 import { isScorable, runMetrics } from './metrics.ts';
 import { aggregate, modelLabel, type Results, type RunValues, type TaskResult } from './results.ts';
 import type { FolderPlan, RunFolder } from './run-folder.ts';
+import { scoreSecurity } from './security.ts';
+import { scoreTests } from './tests.ts';
 import { inspectWorkspace } from './workspace.ts';
 
 export interface ScoreContext {
@@ -61,9 +65,14 @@ function sameRun(plans: readonly FolderPlan[]) {
 export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
   const { first, main, sonnet } = sameRun(ctx.folders.map((folder) => folder.plan));
   const notes = new Set<string>();
-  const starters = new Map<string, string>();
+  const taskById = new Map<string, Task>();
   for (const { name, plan } of ctx.folders) {
     const task = loadTask(ctx.tasksDir, plan.task.id);
+    if (task.services.length > 0) {
+      throw new ConfigError(
+        `${name}: task ${task.id} uses ${task.services.join(', ')}, and scoring does not start services yet, so its hidden tests cannot run.`,
+      );
+    }
     const hash = folderHash(task.starterDir);
     if (plan.task.starterHash === null) {
       notes.add(`${name}: the run did not record its starter; scored against the current one.`);
@@ -72,12 +81,12 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
         `${name}: the starter of task ${task.id} changed since the run, so its diff cannot be scored against it.`,
       );
     }
-    starters.set(plan.task.id, task.starterDir);
+    taskById.set(plan.task.id, task);
   }
 
   const env = dockerEnv(ctx.env);
   await requireDocker(ctx.docker, env);
-  await buildAgentImage(ctx.docker, ctx.dockerDir, env, [], ctx.signal);
+  await buildScoreImage(ctx.docker, ctx.dockerDir, env, ctx.signal);
 
   const groups = new Map<string, Map<Condition, Group>>();
   const used = new Set<string>();
@@ -103,12 +112,13 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
         );
         continue;
       }
-      const starterDir = starters.get(plan.task.id);
-      if (starterDir === undefined) throw new Error(`no starter loaded for ${plan.task.id}`);
+      const task = taskById.get(plan.task.id);
+      if (task === undefined) throw new Error(`task ${plan.task.id} was not loaded`);
       const report = await inspectWorkspace(
         ctx.docker,
         {
-          starterDir,
+          starterDir: task.starterDir,
+          hiddenTestsDir: task.hiddenTestsDir,
           runDir: run.dir,
           reportScript: join(ctx.dockerDir, 'score-report.mjs'),
           name: `theoldman-score-${folder.name}-${run.name}`
@@ -126,19 +136,37 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
       }
       for (const model of Object.keys(run.record.result?.modelUsage ?? {})) used.add(model);
       const comments = scoreComments(run.diff, report.files);
+      const security = scoreSecurity(run.diff, report.semgrep, report.gitleaks);
+      const tests = scoreTests(report.tests);
+      for (const note of tests.notes) notes.add(`${plan.task.id}: ${note}`);
+      const docs = scoreDocs({
+        diff: run.diff,
+        files: report.files,
+        envExamples: report.envExamples,
+        starterDir: task.starterDir,
+        summary: run.summary,
+      });
       const values: RunValues = {
         ...metrics,
         fillerComments: comments.comments,
         addedLines: comments.addedLines,
+        docsFindings: docs.findings,
+        docsInSync: docs.findings === 0 ? 1 : 0,
       };
       if (comments.addedLines > 0) {
         values.fillerPer100Lines = (comments.comments / comments.addedLines) * 100;
       }
       if (report.tsc !== null) values.tscErrors = report.tsc.errors;
       if (report.eslint !== null) values.eslintErrors = report.eslint.errors;
+      if (security.semgrep !== null) values.semgrepFindings = security.semgrep;
+      if (security.gitleaks !== null) values.gitleaksFindings = security.gitleaks;
+      if (tests.hiddenPassRate !== null) values.hiddenTestsPassRate = tests.hiddenPassRate;
+      if (tests.testsAdded !== null) values.testsAdded = tests.testsAdded;
       group.values.push(values);
+      const shown = (value: number | null | undefined): string =>
+        value === null || value === undefined ? '-' : String(Math.round(value * 100) / 100);
       ctx.progress?.(
-        `${folder.name}/${run.name}: ${String(comments.comments)} filler comments, tsc ${String(report.tsc?.errors ?? '-')}, eslint ${String(report.eslint?.errors ?? '-')}`,
+        `${folder.name}/${run.name}: ${String(comments.comments)} filler comments, tsc ${shown(report.tsc?.errors)}, eslint ${shown(report.eslint?.errors)}, semgrep ${shown(security.semgrep)}, gitleaks ${shown(security.gitleaks)}, hidden tests ${shown(tests.hiddenPassRate)}, tests added ${shown(tests.testsAdded)}, docs findings ${String(docs.findings)}`,
       );
     }
   }

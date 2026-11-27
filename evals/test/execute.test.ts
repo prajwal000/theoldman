@@ -106,6 +106,9 @@ describe('executeRuns', () => {
     ]);
     expect(calls[2]?.args).toContain(`NODE_IMAGE=${HUB_NODE ?? ''}`);
     expect(calls[2]?.args).toContain(AGENT_IMAGE);
+    // The agent target leaves out the scoring tools, so Claude cannot use them during a run.
+    expect(calls[2]?.args.join(' ')).toContain('--target agent');
+    expect(calls[2]?.args.join(' ')).not.toMatch(/SEMGREP|GITLEAKS/);
     const pluginCopy = calls.find((call) => call.args.includes(`agent:${PLUGIN_DIR_IN_CONTAINER}`));
     expect(pluginCopy).toBeDefined();
 
