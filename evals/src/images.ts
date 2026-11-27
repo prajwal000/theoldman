@@ -25,6 +25,12 @@ export const IMAGES = {
   },
 } as const satisfies Record<string, PinnedImage>;
 
+/** Claude Code version installed in the agent image. Changing it changes what the evals measure. */
+export const CLAUDE_CODE_VERSION = '2.1.332';
+
+/** Local tag of the agent image built from evals/docker/Dockerfile on the pinned node image. */
+export const AGENT_IMAGE = `theoldman-evals-agent:claude-${CLAUDE_CODE_VERSION}-node-${IMAGES.node.tag}`;
+
 /** Services a task can ask for, each backed by one of the images above. */
 export const SERVICES = ['postgres'] as const;
 export type Service = (typeof SERVICES)[number];
