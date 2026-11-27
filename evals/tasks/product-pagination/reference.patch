@@ -1,0 +1,197 @@
+diff --git a/README.md b/README.md
+index 28ad73e..2d8ce2a 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                                                                                                                                                   |
++| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                                                                                                                                                        |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                                                                                                                                                          |
++| `GET /api/users/me`        | The signed-in user.                                                                                                                                                                                    |
++| `GET /api/products`        | Products, newest first, a page at a time: `?limit=` (default 20, at most 100) and `?cursor=`. Answers `{ items, nextCursor }`; pass `nextCursor` back as `cursor` for the next page, until it is null. |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.                                                                                                                                                           |
++| `GET /api/products/:id`    | One product.                                                                                                                                                                                           |
++| `DELETE /api/products/:id` | Delete a product (admin).                                                                                                                                                                              |
++| `GET /api/orders`          | The signed-in user's orders.                                                                                                                                                                           |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                                                                                                                                                              |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127090221_product_created_at_index/migration.sql b/prisma/migrations/20261127090221_product_created_at_index/migration.sql
+new file mode 100644
+index 0000000..43974c4
+--- /dev/null
++++ b/prisma/migrations/20261127090221_product_created_at_index/migration.sql
+@@ -0,0 +1,2 @@
++-- CreateIndex
++CREATE INDEX "Product_createdAt_id_idx" ON "Product"("createdAt", "id");
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..589661d 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -44,6 +44,8 @@ model Product {
+   priceCents Int
+   createdAt  DateTime @default(now())
+   orders     Order[]
++
++  @@index([createdAt, id])
+ }
+ 
+ model Order {
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..b6c77d6 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -1,10 +1,45 @@
+ import { getCurrentUser } from '../../../lib/auth';
++import { decodeCursor, encodeCursor } from '../../../lib/cursor';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+-export async function GET(): Promise<Response> {
+-  const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
+-  return Response.json(products);
++const DEFAULT_LIMIT = 20;
++const MAX_LIMIT = 100;
++
++export async function GET(request: Request): Promise<Response> {
++  const { searchParams } = new URL(request.url);
++
++  const limitParam = searchParams.get('limit');
++  let limit = DEFAULT_LIMIT;
++  if (limitParam !== null) {
++    if (!/^\d+$/.test(limitParam) || Number(limitParam) < 1) {
++      return jsonError(400, 'limit must be a positive whole number');
++    }
++    limit = Math.min(Number(limitParam), MAX_LIMIT);
++  }
++
++  const cursorParam = searchParams.get('cursor');
++  const cursor = cursorParam === null ? null : decodeCursor(cursorParam);
++  if (cursorParam !== null && cursor === null) return jsonError(400, 'cursor is not valid');
++
++  // One extra row tells whether another page follows, without a count query.
++  const rows = await db.product.findMany({
++    where:
++      cursor === null
++        ? undefined
++        : {
++            OR: [
++              { createdAt: { lt: cursor.createdAt } },
++              { createdAt: cursor.createdAt, id: { lt: cursor.id } },
++            ],
++          },
++    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
++    take: limit + 1,
++  });
++  const items = rows.slice(0, limit);
++  const last = items.at(-1);
++  const nextCursor = rows.length > limit && last !== undefined ? encodeCursor(last) : null;
++  return Response.json({ items, nextCursor });
+ }
+ 
+ export async function POST(request: Request): Promise<Response> {
+diff --git a/src/lib/cursor.ts b/src/lib/cursor.ts
+new file mode 100644
+index 0000000..e5648b9
+--- /dev/null
++++ b/src/lib/cursor.ts
+@@ -0,0 +1,25 @@
++export interface ProductCursor {
++  readonly createdAt: Date;
++  readonly id: string;
++}
++
++// The cursor holds the last item's (createdAt, id) rather than its id alone, so pages stay in
++// order when products share a timestamp, and a cursor keeps working if its product is deleted.
++export function encodeCursor({ createdAt, id }: ProductCursor): string {
++  return Buffer.from(JSON.stringify([createdAt.toISOString(), id])).toString('base64url');
++}
++
++/** The cursor's position, or null when it was not made by encodeCursor. */
++export function decodeCursor(cursor: string): ProductCursor | null {
++  let value: unknown;
++  try {
++    value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
++  } catch {
++    return null;
++  }
++  if (!Array.isArray(value) || value.length !== 2) return null;
++  const [createdAt, id]: unknown[] = value;
++  if (typeof createdAt !== 'string' || typeof id !== 'string') return null;
++  const date = new Date(createdAt);
++  return Number.isNaN(date.getTime()) ? null : { createdAt: date, id };
++}
+diff --git a/test/products.test.ts b/test/products.test.ts
+index a2391a2..583284d 100644
+--- a/test/products.test.ts
++++ b/test/products.test.ts
+@@ -6,6 +6,11 @@ import { createUser, jsonRequest, params, resetDatabase } from './helpers';
+ 
+ beforeEach(resetDatabase);
+ 
++interface Page {
++  items: { id: string; name: string }[];
++  nextCursor: string | null;
++}
++
+ describe('products', () => {
+   it('lets an admin add a product', async () => {
+     const { token } = await createUser('ADMIN');
+@@ -27,8 +32,41 @@ describe('products', () => {
+   it('lists products newest first', async () => {
+     await db.product.create({ data: { name: 'Old', priceCents: 1, createdAt: new Date(1000) } });
+     await db.product.create({ data: { name: 'New', priceCents: 1, createdAt: new Date(2000) } });
+-    const products = (await (await GET()).json()) as { name: string }[];
+-    expect(products.map((product) => product.name)).toEqual(['New', 'Old']);
++    const page = (await (await GET(jsonRequest('/api/products'))).json()) as Page;
++    expect(page.items.map((product) => product.name)).toEqual(['New', 'Old']);
++    expect(page.nextCursor).toBeNull();
++  });
++
++  it('pages through every product once, even with equal timestamps', async () => {
++    const sameMoment = new Date(5000);
++    await db.product.createMany({
++      data: Array.from({ length: 12 }, (_, i) => ({
++        name: `P${String(i)}`,
++        priceCents: 1,
++        createdAt: i < 6 ? sameMoment : new Date(i * 1000),
++      })),
++    });
++    const seen: string[] = [];
++    let cursor: string | null = null;
++    do {
++      const query: string = cursor === null ? '' : `&cursor=${cursor}`;
++      const page = (await (await GET(jsonRequest(`/api/products?limit=5${query}`))).json()) as Page;
++      seen.push(...page.items.map((product) => product.id));
++      cursor = page.nextCursor;
++    } while (cursor !== null);
++    expect(seen).toHaveLength(12);
++    expect(new Set(seen).size).toBe(12);
++  });
++
++  it('caps the page size and rejects a bad limit or cursor', async () => {
++    await db.product.createMany({
++      data: Array.from({ length: 101 }, (_, i) => ({ name: `P${String(i)}`, priceCents: 1 })),
++    });
++    const capped = (await (await GET(jsonRequest('/api/products?limit=1000'))).json()) as Page;
++    expect(capped.items).toHaveLength(100);
++    for (const query of ['limit=0', 'limit=abc', 'limit=2.5', 'cursor=nonsense']) {
++      expect((await GET(jsonRequest(`/api/products?${query}`))).status).toBe(400);
++    }
+   });
+ 
+   it('deletes a product', async () => {

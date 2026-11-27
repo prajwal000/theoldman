@@ -5,20 +5,22 @@
 
 import { join } from 'node:path';
 import type { Condition } from '../args.ts';
-import { buildScoreImage, type DockerExec, requireDocker } from '../docker.ts';
+import { buildScoreImage, type DockerExec, pullFirst, requireDocker } from '../docker.ts';
 import { ConfigError } from '../errors.ts';
+import { IMAGES, imageRefs } from '../images.ts';
 import { isExactModelId } from '../models.ts';
 import type { Env } from '../provider.ts';
 import { dockerEnv } from '../secrets.ts';
-import { folderHash, loadTask, type Task } from '../task.ts';
+import { loadTask, starterHash, type Task } from '../task.ts';
 import { scoreComments } from './comments.ts';
+import { startDatabase } from './database.ts';
 import { scoreDocs } from './docs.ts';
 import { isScorable, runMetrics } from './metrics.ts';
 import { aggregate, modelLabel, type Results, type RunValues, type TaskResult } from './results.ts';
 import type { FolderPlan, RunFolder } from './run-folder.ts';
 import { scoreSecurity } from './security.ts';
 import { scoreTests } from './tests.ts';
-import { inspectWorkspace } from './workspace.ts';
+import { inspectWorkspace, type WorkspaceReport } from './workspace.ts';
 
 export interface ScoreContext {
   readonly folders: readonly RunFolder[];
@@ -68,12 +70,7 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
   const taskById = new Map<string, Task>();
   for (const { name, plan } of ctx.folders) {
     const task = loadTask(ctx.tasksDir, plan.task.id);
-    if (task.services.length > 0) {
-      throw new ConfigError(
-        `${name}: task ${task.id} uses ${task.services.join(', ')}, and scoring does not start services yet, so its hidden tests cannot run.`,
-      );
-    }
-    const hash = folderHash(task.starterDir);
+    const hash = starterHash(task.starterDirs);
     if (plan.task.starterHash === null) {
       notes.add(`${name}: the run did not record its starter; scored against the current one.`);
     } else if (plan.task.starterHash !== hash) {
@@ -87,6 +84,9 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
   const env = dockerEnv(ctx.env);
   await requireDocker(ctx.docker, env);
   await buildScoreImage(ctx.docker, ctx.dockerDir, env, ctx.signal);
+  const postgresImage = [...taskById.values()].some((task) => task.services.includes('postgres'))
+    ? await pullFirst(ctx.docker, imageRefs(IMAGES.postgres), env, ctx.signal)
+    : undefined;
 
   const groups = new Map<string, Map<Condition, Group>>();
   const used = new Set<string>();
@@ -114,20 +114,36 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
       }
       const task = taskById.get(plan.task.id);
       if (task === undefined) throw new Error(`task ${plan.task.id} was not loaded`);
-      const report = await inspectWorkspace(
-        ctx.docker,
-        {
-          starterDir: task.starterDir,
-          hiddenTestsDir: task.hiddenTestsDir,
-          runDir: run.dir,
-          reportScript: join(ctx.dockerDir, 'score-report.mjs'),
-          name: `theoldman-score-${folder.name}-${run.name}`
-            .toLowerCase()
-            .replace(/[^a-z0-9_.-]/g, '-'),
-        },
-        env,
-        ctx.signal,
-      );
+      const name = `theoldman-score-${folder.name}-${run.name}`
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-');
+      const database =
+        postgresImage === undefined || !task.services.includes('postgres')
+          ? undefined
+          : await startDatabase(
+              ctx.docker,
+              { dockerDir: ctx.dockerDir, project: name, postgresImage },
+              env,
+              ctx.signal,
+            );
+      let report: WorkspaceReport;
+      try {
+        report = await inspectWorkspace(
+          ctx.docker,
+          {
+            starterDirs: task.starterDirs,
+            hiddenTestsDir: task.hiddenTestsDir,
+            runDir: run.dir,
+            reportScript: join(ctx.dockerDir, 'score-report.mjs'),
+            name,
+            ...(database === undefined ? {} : { network: database.network }),
+          },
+          env,
+          ctx.signal,
+        );
+      } finally {
+        await database?.stop();
+      }
       for (const note of report.notes) notes.add(`${plan.task.id}: ${note}`);
       if (report.error !== null) {
         group.failed += 1;
@@ -143,7 +159,7 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
         diff: run.diff,
         files: report.files,
         envExamples: report.envExamples,
-        starterDir: task.starterDir,
+        starterDirs: task.starterDirs,
         summary: run.summary,
       });
       const values: RunValues = {

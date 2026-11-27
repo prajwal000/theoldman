@@ -5,6 +5,7 @@
 
 import { type DockerExec, InterruptedError } from '../docker.ts';
 import { ConfigError } from '../errors.ts';
+import { DATABASE_URL } from '../execute.ts';
 import { SCORE_IMAGE } from '../images.ts';
 
 /** A Semgrep or gitleaks finding: the rule and where, never the matched text. */
@@ -54,8 +55,11 @@ export interface WorkspaceReport {
 }
 
 export interface WorkspaceInput {
-  readonly starterDir: string;
+  /** The task's starter folders, copied in this order. */
+  readonly starterDirs: readonly string[];
   readonly hiddenTestsDir: string;
+  /** For a task with Postgres: the Docker network where it answers as `postgres`. */
+  readonly network?: string;
   readonly runDir: string;
   readonly reportScript: string;
   /** Container name, so an interrupted scoring run can remove it. */
@@ -75,12 +79,20 @@ function mount(source: string, target: string): string[] {
 }
 
 export function workspaceArgs(input: WorkspaceInput): string[] {
+  const database =
+    input.network === undefined
+      ? []
+      : ['--network', input.network, '-e', `DATABASE_URL=${DATABASE_URL}`];
   return [
     'run',
     '--rm',
     '--name',
     input.name,
-    ...mount(input.starterDir, '/starter'),
+    ...database,
+    // Prisma's CLI reports usage to Prisma unless told not to.
+    '-e',
+    'CHECKPOINT_DISABLE=1',
+    ...input.starterDirs.flatMap((dir, index) => mount(dir, `/starters/${String(index)}`)),
     ...mount(input.hiddenTestsDir, '/hidden'),
     ...mount(input.runDir, '/run'),
     ...mount(input.reportScript, '/score/report.mjs'),

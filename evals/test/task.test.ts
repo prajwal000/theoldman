@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ConfigError } from '../src/errors.ts';
-import { folderHash, loadTask } from '../src/task.ts';
+import { folderHash, loadTask, starterHash } from '../src/task.ts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
 
@@ -18,7 +18,7 @@ describe('loadTask on the committed template', () => {
       services: [],
     });
     expect(task.prompt).toMatch(/^Add a `clamp\(value, min, max\)` function/);
-    expect(task.starterDir).toBe(join(TASKS, '_template', 'starter'));
+    expect(task.starterDirs).toEqual([join(TASKS, '_template', 'starter')]);
     expect(task.hiddenTestsDir).toBe(join(TASKS, '_template', 'hidden'));
   });
 });
@@ -44,6 +44,77 @@ describe('folderHash', () => {
     expect(edited).not.toBe(first);
     writeFileSync(join(dir, 'src', 'c.ts'), '');
     expect(folderHash(dir)).not.toBe(edited);
+  });
+
+  it('hashes folders copied over each other as the files Claude gets', () => {
+    const overlay = mkdtempSync(join(tmpdir(), 'theoldman-overlay-'));
+    const merged = mkdtempSync(join(tmpdir(), 'theoldman-merged-'));
+    mkdirSync(join(overlay, 'src'));
+    writeFileSync(join(overlay, 'src', 'a.ts'), 'a from the task\n');
+    mkdirSync(join(merged, 'src'));
+    writeFileSync(join(merged, 'src', 'a.ts'), 'a from the task\n');
+    writeFileSync(join(merged, 'b.json'), '{}\n');
+
+    expect(starterHash([dir])).toBe(folderHash(dir));
+    expect(starterHash([dir, overlay])).toBe(folderHash(merged));
+    expect(starterHash([overlay, dir])).toBe(folderHash(dir));
+    rmSync(overlay, { recursive: true, force: true });
+    rmSync(merged, { recursive: true, force: true });
+  });
+});
+
+describe('loadTask with a base starter', () => {
+  let root: string;
+  const tasks = (): string => join(root, 'tasks');
+  const starters = (): string => join(root, 'starters');
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'theoldman-base-'));
+    mkdirSync(join(starters(), 'shop'), { recursive: true });
+    writeFileSync(join(starters(), 'shop', 'package.json'), '{}\n');
+    const dir = join(tasks(), 'sample');
+    mkdirSync(join(dir, 'hidden'), { recursive: true });
+    writeFileSync(join(dir, 'hidden', 'a.test.ts'), '');
+    writeFileSync(join(dir, 'prompt.md'), 'Do the thing.\n');
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const write = (json: Record<string, unknown>): void => {
+    const task = { title: 'Sample', hiddenTests: 'hidden', timeoutMinutes: 10, ...json };
+    writeFileSync(join(tasks(), 'sample', 'task.json'), JSON.stringify(task));
+  };
+
+  it('uses the base alone when the task has no starter of its own', () => {
+    write({ base: 'shop' });
+    expect(loadTask(tasks(), 'sample').starterDirs).toEqual([join(starters(), 'shop')]);
+  });
+
+  it("copies the task's starter over the base", () => {
+    mkdirSync(join(tasks(), 'sample', 'overlay'));
+    write({ base: 'shop', starter: 'overlay' });
+    expect(loadTask(tasks(), 'sample').starterDirs).toEqual([
+      join(starters(), 'shop'),
+      join(tasks(), 'sample', 'overlay'),
+    ]);
+  });
+
+  it.each([
+    [{ base: '../shop' }, '"base" must name a folder in evals/starters/'],
+    [{ base: 'Shop' }, '"base" must name a folder in evals/starters/'],
+    [{ base: 'missing' }, '"base" starter "missing" does not exist'],
+    [{}, '"starter" must name a folder in the task'],
+  ])('rejects %j', (json, message) => {
+    write(json);
+    expect(() => loadTask(tasks(), 'sample')).toThrow(message);
+  });
+
+  it('finds evals/starters next to the tasks folder by default', () => {
+    write({ base: 'shop' });
+    expect(loadTask(tasks(), 'sample', starters()).starterDirs).toEqual(
+      loadTask(tasks(), 'sample').starterDirs,
+    );
   });
 });
 

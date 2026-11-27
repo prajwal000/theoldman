@@ -4,7 +4,7 @@
 // files from the task folder instead.
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, normalize, relative } from 'node:path';
+import { isAbsolute, join, normalize, sep } from 'node:path';
 import { parseDiff } from '../../../packages/hooks/src/lib/diff.js';
 import { dotenvNames } from '../../../packages/hooks/src/lib/dotenv.js';
 import {
@@ -19,7 +19,8 @@ export interface DocsInput {
   readonly files: Readonly<Record<string, string>>;
   /** Final text of every .env.example in the project. */
   readonly envExamples: Readonly<Record<string, string>>;
-  readonly starterDir: string;
+  /** The task's starter folders, in the order they are copied. */
+  readonly starterDirs: readonly string[];
   /** Claude's final message, where OLDMAN-D03 looks for the reason for a new dependency. */
   readonly summary: string;
 }
@@ -29,14 +30,18 @@ export interface DocsScore {
   readonly byRule: Readonly<Record<string, number>>;
 }
 
-/** The starter's version of a file, or undefined if it has none or the path leaves the starter. */
-function starterText(starterDir: string, path: string): string | undefined {
+/**
+ * The starter's version of a file: from the last starter folder that has it, as the folders are
+ * copied over each other. Undefined if none has it or the path leaves the starter.
+ */
+function starterText(starterDirs: readonly string[], path: string): string | undefined {
   const rel = normalize(path);
-  if (isAbsolute(rel) || relative(starterDir, join(starterDir, rel)).startsWith('..')) {
-    return undefined;
+  if (isAbsolute(rel) || rel.split(sep).includes('..')) return undefined;
+  for (const dir of [...starterDirs].reverse()) {
+    const full = join(dir, rel);
+    if (existsSync(full) && statSync(full).isFile()) return readFileSync(full, 'utf8');
   }
-  const full = join(starterDir, rel);
-  return existsSync(full) && statSync(full).isFile() ? readFileSync(full, 'utf8') : undefined;
+  return undefined;
 }
 
 export function scoreDocs(input: DocsInput): DocsScore {
@@ -50,7 +55,7 @@ export function scoreDocs(input: DocsInput): DocsScore {
       packageChanges(
         file,
         input.files[file.path],
-        file.status === 'added' ? undefined : starterText(input.starterDir, file.path),
+        file.status === 'added' ? undefined : starterText(input.starterDirs, file.path),
       ),
     );
   const context: DocsContext = {

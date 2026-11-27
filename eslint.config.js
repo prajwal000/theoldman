@@ -15,6 +15,7 @@ export default defineConfig(
     'examples/',
     // Eval task starters and hidden tests are sample projects too, for the same reason.
     'evals/tasks/',
+    'evals/starters/',
   ]),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,

@@ -1,0 +1,7 @@
+{
+  "title": "Cursor pagination for the product list",
+  "base": "next-prisma",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 30,
+  "services": ["postgres"]
+}

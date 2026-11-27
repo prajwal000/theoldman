@@ -148,7 +148,9 @@ async function runOnce(
   };
   try {
     await step(['up', '-d', '--wait', 'agent', ...task.services], { timeoutMs: 5 * 60_000 });
-    await step(['cp', `${task.starterDir}${sep}.`, 'agent:/workspace']);
+    for (const starterDir of task.starterDirs) {
+      await step(['cp', `${starterDir}${sep}.`, 'agent:/workspace']);
+    }
     if (condition === 'with') {
       await step(['cp', `${ctx.paths.pluginDir}${sep}.`, `agent:${PLUGIN_DIR_IN_CONTAINER}`]);
     }

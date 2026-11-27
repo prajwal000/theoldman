@@ -3,32 +3,39 @@
 // and prints one JSON object: the final text of every changed file and of every .env.example,
 // tsc and ESLint error counts, Semgrep and gitleaks findings (rule, file and line only, never the
 // matched text), and per-file vitest counts with the hidden tests copied in, once on the
-// untouched starter and once on the finished project. The container gets no credentials.
-// Mounted read-only: /starter, /hidden (the task's hidden tests), /run (the run folder with
-// diff.patch) and this script.
+// untouched starter and once on the finished project. The container gets no credentials; for a
+// task with Postgres it gets DATABASE_URL, and each project's Prisma migrations are deployed
+// before its tests run. Mounted read-only: /starters/<n> (the starter folders, copied in order),
+// /hidden (the task's hidden tests), /run (the run folder with diff.patch) and this script.
 
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import process from 'node:process';
+import { URL } from 'node:url';
 
 const WORK = '/tmp/work';
 // The starter's test run happens in a copy, so nothing it writes (node_modules, caches) is in
 // the way when the run's diff is applied to WORK.
 const BASE = '/tmp/base';
+const STARTERS = '/starters';
 const HIDDEN = '/hidden';
 const MAX_FILE_BYTES = 1024 * 1024;
 const SEMGREP_RULES = '/opt/semgrep-rules';
 const notes = [];
 
-function run(command, args, cwd = WORK) {
+function run(command, args, cwd = WORK, env = process.env) {
   return spawnSync(command, args, {
     cwd,
+    env,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     timeout: 10 * 60_000,
   });
 }
+
+const lastLines = (result) =>
+  `${result.stdout ?? ''}\n${result.stderr ?? ''}`.trim().split('\n').slice(-2).join(' ');
 
 function git(...args) {
   return run('git', ['-c', 'core.quotepath=false', ...args]);
@@ -61,12 +68,12 @@ function install(dir = WORK) {
 
 // Per test file: tests passed, failed and skipped, and whether the file loaded at all. A file
 // that fails to load (a syntax error, a missing module) reports no tests.
-function vitest(dir, label, output) {
+function vitest(dir, label, output, env) {
   if (!existsSync(bin('vitest', dir))) {
     notes.push(`vitest is not installed: tests not run on the ${label}`);
     return null;
   }
-  run(bin('vitest', dir), ['run', '--reporter=json', `--outputFile=${output}`], dir);
+  run(bin('vitest', dir), ['run', '--reporter=json', `--outputFile=${output}`], dir, env);
   try {
     const files = {};
     for (const file of JSON.parse(readFileSync(output, 'utf8')).testResults) {
@@ -89,15 +96,54 @@ const hidden = readdirSync(HIDDEN, { recursive: true, withFileTypes: true })
   .filter((entry) => entry.isFile())
   .map((entry) => relative(HIDDEN, join(entry.parentPath, entry.name)));
 const addHidden = (dir) => cpSync(HIDDEN, dir, { recursive: true });
+const starterDirs = readdirSync(STARTERS)
+  .sort((a, b) => Number(a) - Number(b))
+  .map((name) => join(STARTERS, name));
+const copyStarter = (dir) => {
+  for (const starter of starterDirs) cpSync(starter, dir, { recursive: true });
+};
+
+const hasPrisma = (dir) =>
+  existsSync(join(dir, 'prisma', 'schema.prisma')) && existsSync(bin('prisma', dir));
+
+function generateClient(dir, label, env) {
+  if (!hasPrisma(dir)) return;
+  const generate = run(bin('prisma', dir), ['generate'], dir, env);
+  if (generate.status !== 0) notes.push(`prisma generate failed on the ${label}`);
+}
+
+// A project that changes the schema without a migration fails here, as its deploy would.
+function deployMigrations(dir, label, env) {
+  if (env.DATABASE_URL === undefined || !hasPrisma(dir)) return;
+  const deploy = run(bin('prisma', dir), ['migrate', 'deploy'], dir, env);
+  if (deploy.status !== 0) {
+    notes.push(`prisma migrate deploy failed on the ${label}: ${lastLines(deploy)}`);
+  }
+}
+
+// The starter's tests get their own database, so the finished project's migrations start from
+// an empty one.
+function starterEnv() {
+  if (process.env.DATABASE_URL === undefined) return process.env;
+  const url = new URL(process.env.DATABASE_URL);
+  url.pathname = '/starter';
+  return { ...process.env, DATABASE_URL: url.href };
+}
 
 // The hidden tests on the untouched starter give each hidden file's test count, which a file
 // that fails to load on the finished project still owes; the starter's own tests give the
 // baseline for tests added.
-cpSync('/starter', BASE, { recursive: true });
+copyStarter(BASE);
 addHidden(BASE);
-const starterTests = install(BASE) ? vitest(BASE, 'starter', '/tmp/vitest-starter.json') : null;
+let starterTests = null;
+if (install(BASE)) {
+  const env = starterEnv();
+  generateClient(BASE, 'starter', env);
+  deployMigrations(BASE, 'starter', env);
+  starterTests = vitest(BASE, 'starter', '/tmp/vitest-starter.json', env);
+}
 
-cpSync('/starter', WORK, { recursive: true });
+copyStarter(WORK);
 git('init', '-q');
 commit('starter');
 
@@ -140,10 +186,7 @@ const envExamples = textsOf(
 const installed = install();
 
 // Prisma's client types exist only after `prisma generate`, so tsc needs it first.
-if (installed && existsSync(join(WORK, 'prisma', 'schema.prisma')) && existsSync(bin('prisma'))) {
-  const generate = run(bin('prisma'), ['generate']);
-  if (generate.status !== 0) notes.push('prisma generate failed');
-}
+if (installed) generateClient(WORK, 'finished project', process.env);
 
 let tsc = null;
 if (!existsSync(join(WORK, 'tsconfig.json'))) notes.push('no tsconfig.json: tsc not run');
@@ -229,7 +272,11 @@ function gitleaks() {
 const security = { semgrep: semgrep(Object.keys(files)), gitleaks: gitleaks() };
 
 addHidden(WORK);
-const finalTests = installed ? vitest(WORK, 'finished project', '/tmp/vitest-final.json') : null;
+let finalTests = null;
+if (installed) {
+  deployMigrations(WORK, 'finished project', process.env);
+  finalTests = vitest(WORK, 'finished project', '/tmp/vitest-final.json', process.env);
+}
 
 report({
   files,

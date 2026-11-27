@@ -1,0 +1,284 @@
+diff --git a/.env.example b/.env.example
+index e347b07..eabfe91 100644
+--- a/.env.example
++++ b/.env.example
+@@ -1,2 +1,5 @@
+ # Postgres connection string for Prisma and the app.
+ DATABASE_URL=postgresql://shop:shop@localhost:5432/shop
++# Shared secret the payment provider signs webhook requests with. Payment webhooks are refused
++# without it.
++PAYMENT_WEBHOOK_SECRET=whsec_replace_me
+diff --git a/README.md b/README.md
+index 28ad73e..cf0f241 100644
+--- a/README.md
++++ b/README.md
+@@ -18,9 +18,10 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ ## Environment
+ 
+-| Variable       | What                       |
+-| -------------- | -------------------------- |
+-| `DATABASE_URL` | Postgres connection string |
++| Variable                 | What                                            |
++| ------------------------ | ----------------------------------------------- |
++| `DATABASE_URL`           | Postgres connection string                      |
++| `PAYMENT_WEBHOOK_SECRET` | Secret the payment provider signs webhooks with |
+ 
+ ## Tests
+ 
+@@ -30,16 +31,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                         | What                                                                                                                                                                                                         |
++| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
++| `POST /api/auth/signup`       | Create an account: `email`, `name`, `password`.                                                                                                                                                              |
++| `POST /api/auth/login`        | Sign in: `email`, `password`.                                                                                                                                                                                |
++| `GET /api/users/me`           | The signed-in user.                                                                                                                                                                                          |
++| `GET /api/products`           | All products, newest first.                                                                                                                                                                                  |
++| `POST /api/products`          | Add a product (admin): `name`, `priceCents`.                                                                                                                                                                 |
++| `GET /api/products/:id`       | One product.                                                                                                                                                                                                 |
++| `DELETE /api/products/:id`    | Delete a product (admin).                                                                                                                                                                                    |
++| `GET /api/orders`             | The signed-in user's orders.                                                                                                                                                                                 |
++| `POST /api/orders`            | Order a product: `productId`, `quantity`.                                                                                                                                                                    |
++| `POST /api/webhooks/payments` | Payment provider events, signed in the `Payment-Signature` header. `payment.succeeded` marks the order paid and emails a receipt; `payment.failed` cancels a pending order. Each event id takes effect once. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261127090228_webhook_events/migration.sql b/prisma/migrations/20261127090228_webhook_events/migration.sql
+new file mode 100644
+index 0000000..d0a04f7
+--- /dev/null
++++ b/prisma/migrations/20261127090228_webhook_events/migration.sql
+@@ -0,0 +1,8 @@
++-- CreateTable
++CREATE TABLE "WebhookEvent" (
++    "id" TEXT NOT NULL,
++    "type" TEXT NOT NULL,
++    "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "WebhookEvent_pkey" PRIMARY KEY ("id")
++);
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..25555f7 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -46,6 +46,13 @@ model Product {
+   orders     Order[]
+ }
+ 
++/// Payment provider events already handled, so a redelivered event takes effect only once.
++model WebhookEvent {
++  id         String   @id
++  type       String
++  receivedAt DateTime @default(now())
++}
++
+ model Order {
+   id         String      @id @default(cuid())
+   userId     String
+diff --git a/src/app/api/webhooks/payments/route.ts b/src/app/api/webhooks/payments/route.ts
+new file mode 100644
+index 0000000..988148c
+--- /dev/null
++++ b/src/app/api/webhooks/payments/route.ts
+@@ -0,0 +1,82 @@
++import { db } from '../../../../lib/db';
++import { sendEmail } from '../../../../lib/email';
++import { isRecord, jsonError } from '../../../../lib/http';
++import { verifySignature } from '../../../../lib/webhook-signature';
++
++interface PaymentEvent {
++  readonly id: string;
++  readonly type: string;
++  readonly orderId: string | null;
++}
++
++function parseEvent(payload: string): PaymentEvent | null {
++  let value: unknown;
++  try {
++    value = JSON.parse(payload);
++  } catch {
++    return null;
++  }
++  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.type !== 'string') {
++    return null;
++  }
++  const orderId =
++    isRecord(value.data) && typeof value.data.orderId === 'string' ? value.data.orderId : null;
++  return { id: value.id, type: value.type, orderId };
++}
++
++export async function POST(request: Request): Promise<Response> {
++  const secret = process.env.PAYMENT_WEBHOOK_SECRET;
++  // Without a secret nothing can be verified, so nothing is accepted.
++  if (secret === undefined || secret === '') {
++    return jsonError(500, 'payment webhooks are not configured');
++  }
++  // The signature covers the exact bytes sent, so the body is read as text, not parsed and re-encoded.
++  const payload = await request.text();
++  const nowSeconds = Math.floor(Date.now() / 1000);
++  if (!verifySignature(request.headers.get('payment-signature'), payload, secret, nowSeconds)) {
++    return jsonError(400, 'invalid signature');
++  }
++  const event = parseEvent(payload);
++  if (event === null) return jsonError(400, 'malformed event');
++
++  const paidOrderId = await db.$transaction(async (tx) => {
++    // The event id is recorded in the same transaction as its effect, so a redelivery (even a
++    // concurrent one, which waits on the unique id) finds it and does nothing.
++    const recorded = await tx.webhookEvent.createMany({
++      data: [{ id: event.id, type: event.type }],
++      skipDuplicates: true,
++    });
++    if (recorded.count === 0 || event.orderId === null) return null;
++
++    if (event.type === 'payment.succeeded') {
++      const paid = await tx.order.updateMany({
++        where: { id: event.orderId, status: { not: 'PAID' } },
++        data: { status: 'PAID' },
++      });
++      return paid.count === 1 ? event.orderId : null;
++    }
++    if (event.type === 'payment.failed') {
++      // A failed retry must not cancel an order that was already paid.
++      await tx.order.updateMany({
++        where: { id: event.orderId, status: 'PENDING' },
++        data: { status: 'CANCELLED' },
++      });
++    }
++    return null;
++  });
++
++  if (paidOrderId !== null) {
++    const order = await db.order.findUnique({
++      where: { id: paidOrderId },
++      include: { user: true, product: true },
++    });
++    if (order !== null) {
++      await sendEmail({
++        to: order.user.email,
++        subject: 'Your receipt',
++        text: `Thanks for your order of ${String(order.quantity)} x ${order.product.name}. We received your payment of ${(order.totalCents / 100).toFixed(2)}.`,
++      });
++    }
++  }
++  return Response.json({ received: true });
++}
+diff --git a/src/lib/webhook-signature.ts b/src/lib/webhook-signature.ts
+new file mode 100644
+index 0000000..c53fb1e
+--- /dev/null
++++ b/src/lib/webhook-signature.ts
+@@ -0,0 +1,28 @@
++import { createHmac, timingSafeEqual } from 'node:crypto';
++
++export const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
++
++/**
++ * Checks a `Payment-Signature` header (`t=<unix seconds>,v1=<hex HMAC-SHA256>`) against the raw
++ * body. The timestamp is signed too, so an old request cannot be replayed once it is outside the
++ * tolerance. Several `v1` values are allowed, as during a secret rotation.
++ */
++export function verifySignature(
++  header: string | null,
++  payload: string,
++  secret: string,
++  nowSeconds: number,
++): boolean {
++  if (header === null) return false;
++  const fields = header.split(',').map((field) => field.trim().split('='));
++  const timestamp = fields.find(([key]) => key === 't')?.[1];
++  const signatures = fields.filter(([key]) => key === 'v1').map(([, value]) => value ?? '');
++  if (timestamp === undefined || !/^\d+$/.test(timestamp) || signatures.length === 0) return false;
++  if (Math.abs(nowSeconds - Number(timestamp)) > SIGNATURE_TOLERANCE_SECONDS) return false;
++
++  const expected = createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest();
++  return signatures.some((signature) => {
++    const given = Buffer.from(signature, 'hex');
++    return given.length === expected.length && timingSafeEqual(given, expected);
++  });
++}
+diff --git a/test/payments-webhook.test.ts b/test/payments-webhook.test.ts
+new file mode 100644
+index 0000000..ec96f6c
+--- /dev/null
++++ b/test/payments-webhook.test.ts
+@@ -0,0 +1,67 @@
++import { createHmac } from 'node:crypto';
++import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/webhooks/payments/route';
++import { db } from '../src/lib/db';
++import { outbox } from '../src/lib/email';
++import { createUser, resetDatabase } from './helpers';
++
++const SECRET = 'whsec_test_secret';
++
++beforeAll(() => {
++  process.env.PAYMENT_WEBHOOK_SECRET = SECRET;
++});
++afterAll(() => {
++  delete process.env.PAYMENT_WEBHOOK_SECRET;
++});
++beforeEach(async () => {
++  await resetDatabase();
++  outbox.length = 0;
++});
++
++function deliver(event: unknown, { secret = SECRET, age = 0 } = {}): Promise<Response> {
++  const body = JSON.stringify(event);
++  const t = Math.floor(Date.now() / 1000) - age;
++  const signature = createHmac('sha256', secret)
++    .update(`${String(t)}.${body}`)
++    .digest('hex');
++  return POST(
++    new Request('http://localhost/api/webhooks/payments', {
++      method: 'POST',
++      headers: { 'payment-signature': `t=${String(t)},v1=${signature}` },
++      body,
++    }),
++  );
++}
++
++async function pendingOrder() {
++  const { user } = await createUser();
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId: user.id, productId: product.id, quantity: 1, totalCents: 1200 },
++  });
++}
++
++describe('payment webhooks', () => {
++  it('marks an order paid and sends one receipt, however often the event arrives', async () => {
++    const order = await pendingOrder();
++    const event = { id: 'evt_1', type: 'payment.succeeded', data: { orderId: order.id } };
++    expect((await deliver(event)).status).toBe(200);
++    expect((await deliver(event)).status).toBe(200);
++    expect((await db.order.findUnique({ where: { id: order.id } }))?.status).toBe('PAID');
++    expect(outbox).toHaveLength(1);
++  });
++
++  it('cancels an order whose payment failed', async () => {
++    const order = await pendingOrder();
++    await deliver({ id: 'evt_2', type: 'payment.failed', data: { orderId: order.id } });
++    expect((await db.order.findUnique({ where: { id: order.id } }))?.status).toBe('CANCELLED');
++  });
++
++  it('rejects a wrong secret and an old timestamp', async () => {
++    const order = await pendingOrder();
++    const event = { id: 'evt_3', type: 'payment.succeeded', data: { orderId: order.id } };
++    expect((await deliver(event, { secret: 'whsec_wrong' })).status).toBe(400);
++    expect((await deliver(event, { age: 6 * 60 })).status).toBe(400);
++    expect((await db.order.findUnique({ where: { id: order.id } }))?.status).toBe('PENDING');
++  });
++});
