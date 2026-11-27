@@ -13,6 +13,8 @@ export default defineConfig(
     // Sample apps for smoke tests: their dependencies are never installed here, so typed lint
     // rules cannot resolve them. Prettier still checks their formatting.
     'examples/',
+    // Eval task starters and hidden tests are sample projects too, for the same reason.
+    'evals/tasks/',
   ]),
   js.configs.recommended,
   tseslint.configs.strictTypeChecked,

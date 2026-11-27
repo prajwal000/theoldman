@@ -1,0 +1,7 @@
+{
+  "title": "Template: add a clamp function",
+  "starter": "starter",
+  "hiddenTests": "hidden",
+  "timeoutMinutes": 15,
+  "services": []
+}

@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    // The runner runs on Node's type stripping, with no build step: imports name .ts files and
+    // only syntax that can be erased is allowed.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src", "test"]
+}
