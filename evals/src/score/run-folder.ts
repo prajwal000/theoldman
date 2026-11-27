@@ -1,5 +1,6 @@
 // Reads a run folder the runner wrote: plan.json plus one <condition>-<n>/ folder per run with
-// run.json and, when the run got that far, diff.patch. The files are checked for the fields the
+// run.json and, when the run got that far, diff.patch and transcript.jsonl (for Claude's final
+// message). The files are checked for the fields the
 // scorers use, since a folder may come from an older runner or be edited by hand.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -45,6 +46,8 @@ export interface FolderRun {
   readonly record: ScoringRecord;
   /** Null when the run stopped before its diff was taken. */
   readonly diff: string | null;
+  /** Claude's final message, from the last result event in the transcript; '' if none. */
+  readonly summary: string;
 }
 
 export interface RunFolder {
@@ -156,6 +159,25 @@ function readRecord(file: string, label: string): ScoringRecord {
   return { run, wallTimeMs, error, result: { isError, totalCostUsd, durationMs, modelUsage } };
 }
 
+function readSummary(file: string): string {
+  if (!existsSync(file)) return '';
+  let summary = '';
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line.startsWith('{')) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      // A truncated line (the run was stopped mid-write) holds no result.
+      continue;
+    }
+    if (isRecord(event) && event.type === 'result' && typeof event.result === 'string') {
+      summary = event.result;
+    }
+  }
+  return summary;
+}
+
 export function readRunFolder(dir: string): RunFolder {
   const name = basename(dir);
   if (!existsSync(dir)) throw new ConfigError(`Run folder ${dir} does not exist.`);
@@ -170,6 +192,7 @@ export function readRunFolder(dir: string): RunFolder {
         dir: runDir,
         record: readRecord(join(runDir, 'run.json'), `${name}/${entry.name}/run.json`),
         diff: existsSync(diffFile) ? readFileSync(diffFile, 'utf8') : null,
+        summary: readSummary(join(runDir, 'transcript.jsonl')),
       };
     })
     .sort((a, b) => a.record.run - b.record.run);

@@ -667,10 +667,10 @@ function dependencyNames(pkg) {
 function lineOf(file, matches) {
   return (file.addedLines.find(({ text }) => matches(text)) ?? file.addedLines[0])?.line ?? 1;
 }
-function packageChanges(projectDir, file) {
-  const now = manifest(readText(join6(projectDir, file.path)));
+function packageChanges(file, nowText, beforeText) {
+  const now = manifest(nowText);
   if (now === void 0) return { dependencies: [], scripts: [] };
-  const before = (file.status === "added" ? void 0 : manifest(readHeadVersion(join6(projectDir, file.path)))) ?? {};
+  const before = manifest(beforeText) ?? {};
   const old = dependencyNames(before);
   const dependencies = [...dependencyNames(now)].filter((name) => !old.has(name)).map((name) => ({
     file: file.path,
@@ -704,7 +704,13 @@ function exampleVars(projectDir) {
 }
 function buildDocsContext(projectDir, diff, summary = "") {
   const files = parseDiff(diff);
-  const packages = files.filter((file) => file.status !== "deleted" && /(^|\/)package\.json$/.test(file.path)).map((file) => packageChanges(projectDir, file));
+  const packages = files.filter((file) => file.status !== "deleted" && /(^|\/)package\.json$/.test(file.path)).map(
+    (file) => packageChanges(
+      file,
+      readText(join6(projectDir, file.path)),
+      file.status === "added" ? void 0 : readHeadVersion(join6(projectDir, file.path))
+    )
+  );
   return {
     files,
     exampleVars: exampleVars(projectDir),

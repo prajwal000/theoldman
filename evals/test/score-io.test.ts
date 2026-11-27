@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type DockerExec, InterruptedError } from '../src/docker.ts';
 import { ConfigError } from '../src/errors.ts';
-import { AGENT_IMAGE } from '../src/images.ts';
+import { SCORE_IMAGE } from '../src/images.ts';
 import { isExactModelId } from '../src/models.ts';
 import {
   aggregate,
@@ -19,13 +19,14 @@ import { plan, writeRunFolder } from './run-folders.ts';
 
 const INPUT = {
   starterDir: 'C:\\evals\\tasks\\_template\\starter',
+  hiddenTestsDir: 'C:\\evals\\tasks\\_template\\hidden',
   runDir: 'C:\\evals\\runs\\2026-11-27T10-00-00-000Z\\with-1',
   reportScript: 'C:\\evals\\docker\\score-report.mjs',
   name: 'theoldman-score-x-with-1',
 };
 
 describe('workspaceArgs', () => {
-  it('mounts the starter, the run folder and the script read-only, and passes no environment', () => {
+  it('mounts the starter, hidden tests, run folder and script read-only, with no environment', () => {
     const args = workspaceArgs(INPUT);
     expect(args).toEqual([
       'run',
@@ -35,12 +36,14 @@ describe('workspaceArgs', () => {
       '--mount',
       `type=bind,source=${INPUT.starterDir},target=/starter,readonly`,
       '--mount',
+      `type=bind,source=${INPUT.hiddenTestsDir},target=/hidden,readonly`,
+      '--mount',
       `type=bind,source=${INPUT.runDir},target=/run,readonly`,
       '--mount',
       `type=bind,source=${INPUT.reportScript},target=/score/report.mjs,readonly`,
       '--entrypoint',
       'node',
-      AGENT_IMAGE,
+      SCORE_IMAGE,
       '/score/report.mjs',
     ]);
     expect(args).not.toContain('-e');
@@ -53,25 +56,45 @@ describe('workspaceArgs', () => {
 });
 
 describe('parseReport', () => {
+  const tests = {
+    hidden: ['src/math.hidden.test.ts'],
+    starter: { 'src/math.hidden.test.ts': { passed: 0, failed: 3, skipped: 0, loaded: true } },
+    final: null,
+  };
   const report = {
     notes: ['no eslint.config file: ESLint not run'],
     files: { 'src/math.ts': 'export {};\n' },
+    envExamples: { '.env.example': 'PORT=3000\n' },
     tsc: { errors: 2 },
     eslint: null,
+    semgrep: { findings: [{ rule: 'eval-detected', path: 'src/math.ts', line: 3, endLine: 4 }] },
+    gitleaks: { findings: [{ rule: 'aws-access-token', path: 'src/keys.ts', line: 1 }] },
+    tests,
   };
 
   it('reads the last line of the container output', () => {
     expect(parseReport(`npm noise\n${JSON.stringify(report)}\n`)).toEqual({
       ...report,
+      semgrep: report.semgrep.findings,
+      gitleaks: [{ rule: 'aws-access-token', path: 'src/keys.ts', line: 1, endLine: 1 }],
       error: null,
     });
+  });
+
+  it('keeps a tool that could not scan as null', () => {
+    const parsed = parseReport(JSON.stringify({ ...report, semgrep: null, gitleaks: null }));
+    expect([parsed.semgrep, parsed.gitleaks]).toEqual([null, null]);
   });
 
   it('passes on a diff that does not apply', () => {
     expect(parseReport(JSON.stringify({ notes: [], error: 'does not apply' }))).toEqual({
       files: {},
+      envExamples: {},
       tsc: null,
       eslint: null,
+      semgrep: null,
+      gitleaks: null,
+      tests: { hidden: [], starter: null, final: null },
       notes: [],
       error: 'does not apply',
     });
@@ -81,8 +104,19 @@ describe('parseReport', () => {
     ['', 'printed no report'],
     ['[]', 'not an object'],
     [JSON.stringify({ ...report, files: { 'a.ts': 1 } }), 'is not text'],
+    [JSON.stringify({ ...report, envExamples: undefined }), 'has no envExamples'],
     [JSON.stringify({ ...report, tsc: { errors: -1 } }), 'malformed tsc count'],
     [JSON.stringify({ ...report, eslint: { errors: 1 } }), 'malformed ESLint counts'],
+    [JSON.stringify({ ...report, semgrep: [] }), 'malformed Semgrep findings'],
+    [
+      JSON.stringify({ ...report, gitleaks: { findings: [{ rule: 'x', path: 'a', line: 0 }] } }),
+      'malformed gitleaks findings',
+    ],
+    [JSON.stringify({ ...report, tests: undefined }), 'has no test results'],
+    [
+      JSON.stringify({ ...report, tests: { ...tests, final: { 'a.test.ts': { passed: 1 } } } }),
+      'malformed test counts',
+    ],
   ])('rejects a report without its shape (%#)', (stdout, message) => {
     expect(() => parseReport(stdout)).toThrow(message);
   });
@@ -131,6 +165,22 @@ describe('readRunFolder', () => {
       ['with-2', true],
     ]);
     expect(folder.runs[0]?.record.result?.modelUsage['claude-sonnet-5-5']?.outputTokens).toBe(5000);
+  });
+
+  it("takes Claude's final message from the last result event in the transcript", () => {
+    const dir = writeRunFolder(root, 'f', plan(), [{}, {}]);
+    const events = [
+      { type: 'result', result: 'first turn' },
+      { type: 'assistant', message: {} },
+      { type: 'result', result: 'Added clamp to src/math.ts.' },
+    ];
+    writeFileSync(
+      join(dir, 'with-1', 'transcript.jsonl'),
+      `${events.map((event) => JSON.stringify(event)).join('\n')}\n{"type":"res`,
+    );
+    const [first, second] = readRunFolder(dir).runs;
+    expect(first?.summary).toBe('Added clamp to src/math.ts.');
+    expect(second?.summary).toBe('');
   });
 
   it('records a missing starter hash from an older runner as unknown', () => {
