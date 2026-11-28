@@ -1,0 +1,14 @@
+{
+  "title": "Cache the order list briefly",
+  "description": "The order page polls GET /api/orders every few seconds, and that is now our busiest route. Its response may be cached for 30 seconds, so the CDN absorbs most of the polling. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "cache-order-list",
+  "comments": [
+    {
+      "id": "public-cache",
+      "file": "src/app/api/orders/route.ts",
+      "line": 17,
+      "issue": "The response is each customer's own order list, but `Cache-Control: public` lets the CDN or any shared cache store it and serve it to other users requesting the same URL, with no `Vary` on the Authorization or Cookie header. Use `private` (or `no-store`) for per-user responses."
+    }
+  ]
+}

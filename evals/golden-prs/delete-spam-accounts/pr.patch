@@ -1,0 +1,104 @@
+diff --git a/README.md b/README.md
+index 28ad73e..3c88689 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                         | What                                            |
++| ----------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`       | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`        | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`           | The signed-in user.                             |
++| `GET /api/products`           | All products, newest first.                     |
++| `POST /api/products`          | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`       | One product.                                    |
++| `DELETE /api/products/:id`    | Delete a product (admin).                       |
++| `GET /api/orders`             | The signed-in user's orders.                    |
++| `POST /api/orders`            | Order a product: `productId`, `quantity`.       |
++| `DELETE /api/admin/users/:id` | Delete a customer account (admin).              |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/users/[id]/route.ts b/src/app/api/admin/users/[id]/route.ts
+new file mode 100644
+index 0000000..0849d76
+--- /dev/null
++++ b/src/app/api/admin/users/[id]/route.ts
+@@ -0,0 +1,21 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function DELETE(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can delete accounts');
++
++  const { id } = await params;
++  const target = await db.user.findUnique({ where: { id } });
++  if (target === null) return jsonError(404, 'account not found');
++  if (target.role === 'ADMIN') return jsonError(409, 'admin accounts cannot be deleted here');
++
++  await db.user.delete({ where: { id } });
++  return new Response(null, { status: 204 });
++}
+diff --git a/test/admin-delete-user.test.ts b/test/admin-delete-user.test.ts
+new file mode 100644
+index 0000000..0f6f47d
+--- /dev/null
++++ b/test/admin-delete-user.test.ts
+@@ -0,0 +1,38 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { DELETE } from '../src/app/api/admin/users/[id]/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function remove(id: string, token: string) {
++  return DELETE(jsonRequest(`/api/admin/users/${id}`, { method: 'DELETE', token }), params({ id }));
++}
++
++describe('deleting an account', () => {
++  it('deletes a customer account and signs it out', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: spammer, token: spamToken } = await createUser();
++    expect((await remove(spammer.id, token)).status).toBe(204);
++    expect(await db.user.findUnique({ where: { id: spammer.id } })).toBeNull();
++    expect((await me(jsonRequest('/api/users/me', { token: spamToken }))).status).toBe(401);
++  });
++
++  it('does not delete admins', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: other } = await createUser('ADMIN');
++    expect((await remove(other.id, token)).status).toBe(409);
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    expect((await remove(other.id, token)).status).toBe(403);
++  });
++
++  it('answers 404 for an unknown account', async () => {
++    const { token } = await createUser('ADMIN');
++    expect((await remove('missing', token)).status).toBe(404);
++  });
++});

@@ -1,0 +1,117 @@
+diff --git a/README.md b/README.md
+index 28ad73e..6b923bc 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                         | What                                             |
++| ----------------------------- | ------------------------------------------------ |
++| `POST /api/auth/signup`       | Create an account: `email`, `name`, `password`.  |
++| `POST /api/auth/login`        | Sign in: `email`, `password`.                    |
++| `GET /api/users/me`           | The signed-in user.                              |
++| `GET /api/products`           | All products, newest first.                      |
++| `POST /api/products`          | Add a product (admin): `name`, `priceCents`.     |
++| `GET /api/products/:id`       | One product.                                     |
++| `DELETE /api/products/:id`    | Delete a product (admin).                        |
++| `GET /api/orders`             | The signed-in user's orders.                     |
++| `POST /api/orders`            | Order a product: `productId`, `quantity`.        |
++| `GET /api/orders/:id/receipt` | A printable HTML receipt for one of your orders. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/[id]/receipt/route.ts b/src/app/api/orders/[id]/receipt/route.ts
+new file mode 100644
+index 0000000..bd55065
+--- /dev/null
++++ b/src/app/api/orders/[id]/receipt/route.ts
+@@ -0,0 +1,35 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++const money = (cents: number): string => (cents / 100).toFixed(2);
++
++export async function GET(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const { id } = await params;
++  const order = await db.order.findFirst({
++    where: { id, userId: user.id },
++    include: { product: { select: { name: true } } },
++  });
++  if (order === null) return jsonError(404, 'order not found');
++
++  const html = `<!doctype html>
++<html lang="en">
++<head><meta charset="utf-8"><title>Receipt ${order.id}</title></head>
++<body>
++<h1>Receipt for ${user.name}</h1>
++<table>
++<tr><th>Product</th><th>Quantity</th><th>Total</th></tr>
++<tr><td>${order.product.name}</td><td>${order.quantity}</td><td>${money(order.totalCents)}</td></tr>
++</table>
++<p>Order ${order.id}, placed ${order.createdAt.toISOString().slice(0, 10)}.</p>
++</body>
++</html>`;
++  return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
++}
+diff --git a/test/orders-receipt-page.test.ts b/test/orders-receipt-page.test.ts
+new file mode 100644
+index 0000000..1a6ffd8
+--- /dev/null
++++ b/test/orders-receipt-page.test.ts
+@@ -0,0 +1,37 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/[id]/receipt/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string) {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1250 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 2, totalCents: 2500 },
++  });
++}
++
++function receipt(id: string, token: string) {
++  return GET(jsonRequest(`/api/orders/${id}/receipt`, { token }), params({ id }));
++}
++
++describe('printable receipt', () => {
++  it('renders the order as an HTML page', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id);
++    const response = await receipt(order.id, token);
++    expect(response.status).toBe(200);
++    expect(response.headers.get('content-type')).toBe('text/html; charset=utf-8');
++    const html = await response.text();
++    expect(html).toContain('<h1>Receipt for Test User</h1>');
++    expect(html).toContain('<td>Mug</td><td>2</td><td>25.00</td>');
++  });
++
++  it("does not render another customer's order", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const order = await orderFor(other.id);
++    expect((await receipt(order.id, token)).status).toBe(404);
++  });
++});

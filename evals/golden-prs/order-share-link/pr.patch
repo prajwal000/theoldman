@@ -1,0 +1,176 @@
+diff --git a/README.md b/README.md
+index 28ad73e..2a5cbd2 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,18 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                        | What                                            |
++| ---------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`      | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`       | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`          | The signed-in user.                             |
++| `GET /api/products`          | All products, newest first.                     |
++| `POST /api/products`         | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`      | One product.                                    |
++| `DELETE /api/products/:id`   | Delete a product (admin).                       |
++| `GET /api/orders`            | The signed-in user's orders.                    |
++| `POST /api/orders`           | Order a product: `productId`, `quantity`.       |
++| `POST /api/orders/:id/share` | A share link for one of your orders.            |
++| `GET /api/shared/:token`     | A shared order: product, quantity, total.       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261203100000_order_share_token/migration.sql b/prisma/migrations/20261203100000_order_share_token/migration.sql
+new file mode 100644
+index 0000000..30e2394
+--- /dev/null
++++ b/prisma/migrations/20261203100000_order_share_token/migration.sql
+@@ -0,0 +1,5 @@
++-- AlterTable
++ALTER TABLE "Order" ADD COLUMN     "shareToken" TEXT;
++
++-- CreateIndex
++CREATE UNIQUE INDEX "Order_shareToken_key" ON "Order"("shareToken");
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..20a03a3 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -55,5 +55,6 @@ model Order {
+   quantity   Int
+   totalCents Int
+   status     OrderStatus @default(PENDING)
++  shareToken String?     @unique
+   createdAt  DateTime    @default(now())
+ }
+diff --git a/src/app/api/orders/[id]/share/route.ts b/src/app/api/orders/[id]/share/route.ts
+new file mode 100644
+index 0000000..09b813a
+--- /dev/null
++++ b/src/app/api/orders/[id]/share/route.ts
+@@ -0,0 +1,28 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++function shareCode(): string {
++  return Math.random().toString(36).slice(2, 10);
++}
++
++export async function POST(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const { id } = await params;
++  const order = await db.order.findFirst({ where: { id, userId: user.id } });
++  if (order === null) return jsonError(404, 'order not found');
++
++  // Only the first share sets the token, so links already handed out keep working.
++  await db.order.updateMany({ where: { id, shareToken: null }, data: { shareToken: shareCode() } });
++  const { shareToken } = await db.order.findUniqueOrThrow({
++    where: { id },
++    select: { shareToken: true },
++  });
++  return Response.json({ url: `/api/shared/${shareToken ?? ''}` });
++}
+diff --git a/src/app/api/shared/[token]/route.ts b/src/app/api/shared/[token]/route.ts
+new file mode 100644
+index 0000000..65f495c
+--- /dev/null
++++ b/src/app/api/shared/[token]/route.ts
+@@ -0,0 +1,22 @@
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ token: string }>;
++}
++
++/** A shared order shows what was bought, never who bought it. */
++export async function GET(_request: Request, { params }: Context): Promise<Response> {
++  const { token } = await params;
++  const order = await db.order.findUnique({
++    where: { shareToken: token },
++    select: {
++      quantity: true,
++      totalCents: true,
++      createdAt: true,
++      product: { select: { name: true } },
++    },
++  });
++  if (order === null) return jsonError(404, 'shared order not found');
++  return Response.json(order);
++}
+diff --git a/test/orders-share.test.ts b/test/orders-share.test.ts
+new file mode 100644
+index 0000000..08957fe
+--- /dev/null
++++ b/test/orders-share.test.ts
+@@ -0,0 +1,52 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as share } from '../src/app/api/orders/[id]/share/route';
++import { GET as shared } from '../src/app/api/shared/[token]/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string) {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 2, totalCents: 2400 },
++  });
++}
++
++async function shareLink(id: string, token: string): Promise<Response> {
++  return share(jsonRequest(`/api/orders/${id}/share`, { method: 'POST', token }), params({ id }));
++}
++
++function view(url: string) {
++  const token = url.split('/').at(-1) ?? '';
++  return shared(jsonRequest(url), params({ token }));
++}
++
++describe('sharing an order', () => {
++  it('gives a link that shows what was bought but not who bought it', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id);
++    const { url } = (await (await shareLink(order.id, token)).json()) as { url: string };
++    const body = (await (await view(url)).json()) as Record<string, unknown>;
++    expect(body).toMatchObject({ quantity: 2, totalCents: 2400, product: { name: 'Mug' } });
++    expect(body).not.toHaveProperty('userId');
++  });
++
++  it('keeps the same link when shared again', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id);
++    const first = await (await shareLink(order.id, token)).json();
++    expect(await (await shareLink(order.id, token)).json()).toEqual(first);
++  });
++
++  it("does not share another customer's order", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const order = await orderFor(other.id);
++    expect((await shareLink(order.id, token)).status).toBe(404);
++  });
++
++  it('answers 404 for an unknown link', async () => {
++    expect((await view('/api/shared/nope')).status).toBe(404);
++  });
++});

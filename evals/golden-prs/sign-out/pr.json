@@ -1,0 +1,8 @@
+{
+  "title": "Add sign-out",
+  "description": "Adds POST /api/auth/logout, which ends the session the request is signed in with and answers 204. Other sessions of the same user stay signed in. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "sign-out",
+  "clean": true,
+  "comments": []
+}

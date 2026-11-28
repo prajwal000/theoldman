@@ -1,0 +1,8 @@
+{
+  "title": "Let customers cancel a pending order",
+  "description": "Adds POST /api/orders/:id/cancel so a customer can cancel one of their own orders before it is paid. Paid and cancelled orders are refused with 409. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "cancel-pending-order",
+  "clean": true,
+  "comments": []
+}

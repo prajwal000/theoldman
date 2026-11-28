@@ -1,0 +1,54 @@
+diff --git a/README.md b/README.md
+index 28ad73e..7d8f086 100644
+--- a/README.md
++++ b/README.md
+@@ -35,7 +35,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+ | `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
++| `GET /api/products`        | All products, newest first, then by id.         |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..ccf88dd 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -3,7 +3,9 @@ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+ export async function GET(): Promise<Response> {
+-  const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
++  const products = await db.product.findMany({
++    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
++  });
+   return Response.json(products);
+ }
+ 
+diff --git a/test/products-order.test.ts b/test/products-order.test.ts
+new file mode 100644
+index 0000000..e789140
+--- /dev/null
++++ b/test/products-order.test.ts
+@@ -0,0 +1,20 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('product list order', () => {
++  it('breaks ties in createdAt by id, newest id first', async () => {
++    const createdAt = new Date(1000);
++    for (const id of ['b', 'c', 'a']) {
++      await db.product.create({ data: { id, name: id, priceCents: 1, createdAt } });
++    }
++    await db.product.create({
++      data: { id: 'z', name: 'older', priceCents: 1, createdAt: new Date(0) },
++    });
++    const products = (await (await GET()).json()) as { id: string }[];
++    expect(products.map((product) => product.id)).toEqual(['c', 'b', 'a', 'z']);
++  });
++});

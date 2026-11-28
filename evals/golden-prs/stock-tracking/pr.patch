@@ -1,0 +1,208 @@
+diff --git a/README.md b/README.md
+index 28ad73e..08429ef 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,18 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                           |
++| -------------------------- | -------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                  |
++| `GET /api/users/me`        | The signed-in user.                                            |
++| `GET /api/products`        | All products, newest first.                                    |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`, optional `stock`. |
++| `GET /api/products/:id`    | One product.                                                   |
++| `DELETE /api/products/:id` | Delete a product (admin).                                      |
++| `GET /api/orders`          | The signed-in user's orders.                                   |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                      |
++
++Products with a `stock` count lose the ordered items from it; `POST /api/orders` answers 409 when there are not enough. Products without one are not tracked.
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261203110000_product_stock/migration.sql b/prisma/migrations/20261203110000_product_stock/migration.sql
+new file mode 100644
+index 0000000..2af84fe
+--- /dev/null
++++ b/prisma/migrations/20261203110000_product_stock/migration.sql
+@@ -0,0 +1,2 @@
++-- AlterTable
++ALTER TABLE "Product" ADD COLUMN     "stock" INTEGER;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..363ebe8 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -42,6 +42,7 @@ model Product {
+   id         String   @id @default(cuid())
+   name       String
+   priceCents Int
++  stock      Int?
+   createdAt  DateTime @default(now())
+   orders     Order[]
+ }
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..fb25bab 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -13,6 +13,8 @@ export async function GET(request: Request): Promise<Response> {
+   return Response.json(orders);
+ }
+ 
++class OutOfStock extends Error {}
++
+ export async function POST(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+@@ -27,16 +29,32 @@ export async function POST(request: Request): Promise<Response> {
+   ) {
+     return jsonError(400, 'productId and a whole, positive quantity are required');
+   }
+-  const product = await db.product.findUnique({ where: { id: body.productId } });
+-  if (product === null) return jsonError(404, 'product not found');
++  const { productId, quantity } = body;
+ 
+-  const order = await db.order.create({
+-    data: {
+-      userId: user.id,
+-      productId: product.id,
+-      quantity: body.quantity,
+-      totalCents: product.priceCents * body.quantity,
+-    },
+-  });
+-  return Response.json(order, { status: 201 });
++  try {
++    const order = await db.$transaction(async (tx) => {
++      const product = await tx.product.findUnique({ where: { id: productId } });
++      if (product === null) return null;
++      if (product.stock !== null) {
++        if (product.stock < quantity) throw new OutOfStock();
++        await tx.product.update({
++          where: { id: product.id },
++          data: { stock: product.stock - quantity },
++        });
++      }
++      return tx.order.create({
++        data: {
++          userId: user.id,
++          productId: product.id,
++          quantity,
++          totalCents: product.priceCents * quantity,
++        },
++      });
++    });
++    if (order === null) return jsonError(404, 'product not found');
++    return Response.json(order, { status: 201 });
++  } catch (error) {
++    if (error instanceof OutOfStock) return jsonError(409, 'not enough stock');
++    throw error;
++  }
+ }
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..7d23525 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -7,6 +7,9 @@ export async function GET(): Promise<Response> {
+   return Response.json(products);
+ }
+ 
++const isCount = (value: unknown): value is number =>
++  typeof value === 'number' && Number.isInteger(value) && value >= 0;
++
+ export async function POST(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+@@ -17,14 +20,20 @@ export async function POST(request: Request): Promise<Response> {
+     !isRecord(body) ||
+     typeof body.name !== 'string' ||
+     body.name.trim() === '' ||
+-    typeof body.priceCents !== 'number' ||
+-    !Number.isInteger(body.priceCents) ||
+-    body.priceCents < 0
++    !isCount(body.priceCents) ||
++    (body.stock !== undefined && body.stock !== null && !isCount(body.stock))
+   ) {
+-    return jsonError(400, 'name and a whole, non-negative priceCents are required');
++    return jsonError(
++      400,
++      'name and a whole, non-negative priceCents are required; stock is optional, a whole number >= 0',
++    );
+   }
+   const product = await db.product.create({
+-    data: { name: body.name.trim(), priceCents: body.priceCents },
++    data: {
++      name: body.name.trim(),
++      priceCents: body.priceCents,
++      stock: isCount(body.stock) ? body.stock : null,
++    },
+   });
+   return Response.json(product, { status: 201 });
+ }
+diff --git a/test/orders-stock.test.ts b/test/orders-stock.test.ts
+new file mode 100644
+index 0000000..7128a9e
+--- /dev/null
++++ b/test/orders-stock.test.ts
+@@ -0,0 +1,51 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/orders/route';
++import { POST as addProduct } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function order(productId: string, quantity: number, token: string) {
++  return POST(jsonRequest('/api/orders', { body: { productId, quantity }, token }));
++}
++
++describe('stock', () => {
++  it('lets an admin set the stock of a new product', async () => {
++    const { token } = await createUser('ADMIN');
++    const response = await addProduct(
++      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1200, stock: 5 }, token }),
++    );
++    expect(response.status).toBe(201);
++    expect(await response.json()).toMatchObject({ stock: 5 });
++    const bad = await addProduct(
++      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1200, stock: -1 }, token }),
++    );
++    expect(bad.status).toBe(400);
++  });
++
++  it('takes ordered items out of stock', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200, stock: 5 } });
++    expect((await order(product.id, 2, token)).status).toBe(201);
++    const stored = await db.product.findUniqueOrThrow({ where: { id: product.id } });
++    expect(stored.stock).toBe(3);
++  });
++
++  it('refuses an order larger than the stock, and keeps the stock', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200, stock: 1 } });
++    expect((await order(product.id, 2, token)).status).toBe(409);
++    const stored = await db.product.findUniqueOrThrow({ where: { id: product.id } });
++    expect(stored.stock).toBe(1);
++    expect(await db.order.count()).toBe(0);
++  });
++
++  it('does not track products without a stock count', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'E-book', priceCents: 500 } });
++    expect((await order(product.id, 100, token)).status).toBe(201);
++    const stored = await db.product.findUniqueOrThrow({ where: { id: product.id } });
++    expect(stored.stock).toBeNull();
++  });
++});

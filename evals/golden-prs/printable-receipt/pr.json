@@ -1,0 +1,14 @@
+{
+  "title": "Add a printable receipt page",
+  "description": "Customers asked for a receipt they can print. Adds GET /api/orders/:id/receipt, an HTML page with the customer's name and the order's product, quantity and total. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "printable-receipt",
+  "comments": [
+    {
+      "id": "html-escape",
+      "file": "src/app/api/orders/[id]/receipt/route.ts",
+      "line": 26,
+      "issue": "The user's name and the product name are put into the HTML without escaping, and both are free text (anyone can sign up with a name like `<script>...</script>`), so the receipt page runs injected script on the shop's origin: stored XSS. Escape them or render with React."
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+diff --git a/README.md b/README.md
+index 28ad73e..3f45ae0 100644
+--- a/README.md
++++ b/README.md
+@@ -38,6 +38,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `GET /api/products`        | All products, newest first.                     |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
++| `PATCH /api/products/:id`  | Update a product (admin): `name`, `priceCents`. |
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+diff --git a/src/app/api/products/[id]/route.ts b/src/app/api/products/[id]/route.ts
+index c357885..dc607f4 100644
+--- a/src/app/api/products/[id]/route.ts
++++ b/src/app/api/products/[id]/route.ts
+@@ -1,6 +1,6 @@
+ import { getCurrentUser } from '../../../../lib/auth';
+ import { db } from '../../../../lib/db';
+-import { jsonError } from '../../../../lib/http';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
+ 
+ interface Context {
+   readonly params: Promise<{ id: string }>;
+@@ -13,6 +13,36 @@ export async function GET(_request: Request, { params }: Context): Promise<Respo
+   return Response.json(product);
+ }
+ 
++const isPrice = (value: unknown): value is number =>
++  typeof value === 'number' && Number.isInteger(value) && value >= 0;
++
++export async function PATCH(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can change products');
++
++  const body = await readJson(request);
++  if (
++    !isRecord(body) ||
++    (body.name !== undefined && (typeof body.name !== 'string' || body.name.trim() === '')) ||
++    (body.priceCents !== undefined && !isPrice(body.priceCents))
++  ) {
++    return jsonError(400, 'name must be a non-empty string and priceCents a whole number >= 0');
++  }
++  const name = typeof body.name === 'string' ? body.name.trim() : undefined;
++  const priceCents = isPrice(body.priceCents) ? body.priceCents : undefined;
++
++  const { id } = await params;
++  const product = await db.product.findUnique({ where: { id } });
++  if (product === null) return jsonError(404, 'product not found');
++
++  const updated = await db.product.update({
++    where: { id },
++    data: { name: name ?? product.name, priceCents: priceCents || product.priceCents },
++  });
++  return Response.json(updated);
++}
++
+ export async function DELETE(request: Request, { params }: Context): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+diff --git a/test/products-patch.test.ts b/test/products-patch.test.ts
+new file mode 100644
+index 0000000..029edad
+--- /dev/null
++++ b/test/products-patch.test.ts
+@@ -0,0 +1,47 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { PATCH } from '../src/app/api/products/[id]/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function patch(id: string, body: unknown, token: string) {
++  return PATCH(
++    jsonRequest(`/api/products/${id}`, { method: 'PATCH', body, token }),
++    params({ id }),
++  );
++}
++
++describe('updating a product', () => {
++  it('changes only the fields sent', async () => {
++    const { token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    expect(await (await patch(product.id, { priceCents: 1500 }, token)).json()).toMatchObject({
++      name: 'Mug',
++      priceCents: 1500,
++    });
++    expect(await (await patch(product.id, { name: ' Big Mug ' }, token)).json()).toMatchObject({
++      name: 'Big Mug',
++      priceCents: 1500,
++    });
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    expect((await patch(product.id, { priceCents: 1 }, token)).status).toBe(403);
++  });
++
++  it('refuses a blank name or an invalid price', async () => {
++    const { token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    for (const body of [{ name: ' ' }, { priceCents: -1 }, { priceCents: 1.5 }, 'x']) {
++      expect((await patch(product.id, body, token)).status).toBe(400);
++    }
++  });
++
++  it('answers 404 for an unknown product', async () => {
++    const { token } = await createUser('ADMIN');
++    expect((await patch('missing', { priceCents: 1 }, token)).status).toBe(404);
++  });
++});

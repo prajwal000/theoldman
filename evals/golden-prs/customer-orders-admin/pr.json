@@ -1,0 +1,14 @@
+{
+  "title": "Let admins see a customer's orders",
+  "description": "Support needs a customer's order history when they call. Adds GET /api/admin/users/:id/orders for admins, newest first. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "customer-orders-admin",
+  "comments": [
+    {
+      "id": "shared-state",
+      "file": "test/admin-customer-orders.test.ts",
+      "line": 9,
+      "issue": "The tests share the admin token and customer created in the first test, and the database is reset only once (`beforeAll`), so each later test depends on the ones before it: run alone (`-t`, `.only`) or in another order they fail, and one failure cascades. Create what each test needs in `beforeEach`."
+    }
+  ]
+}

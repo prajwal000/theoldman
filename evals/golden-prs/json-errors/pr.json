@@ -1,0 +1,14 @@
+{
+  "title": "Return JSON for unexpected errors in the order routes",
+  "description": "When an order route fails unexpectedly, clients get Next's HTML error page, which the mobile app cannot read. Adds `withErrors` in `src/lib/http.ts`, which logs the error and answers a JSON 500, and wraps GET and POST /api/orders with it. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "json-errors",
+  "comments": [
+    {
+      "id": "error-details",
+      "file": "src/lib/http.ts",
+      "line": 32,
+      "issue": "The 500 response sends the raw error message and stack trace to the client: Prisma messages include queries, table and column names and sometimes values, and the stack shows server paths. Log the details and send a generic message."
+    }
+  ]
+}

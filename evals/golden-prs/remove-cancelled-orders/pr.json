@@ -1,0 +1,14 @@
+{
+  "title": "Let customers remove cancelled orders from their history",
+  "description": "Customers asked to tidy their order history. Adds DELETE /api/orders/:id for one of the customer's own cancelled orders; pending and paid orders stay. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "remove-cancelled-orders",
+  "comments": [
+    {
+      "id": "swallowed-assertion",
+      "file": "test/orders-remove.test.ts",
+      "line": 33,
+      "issue": "The route answers 409 rather than throwing, so the `catch` never runs and the test makes no assertion at all: it would pass if paid orders could be removed. Assert the 409 status and that the order still exists."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Share the admin check between product routes",
+  "description": "Adding a product and deleting one repeated the same sign-in and admin checks. Moves them into `requireAdmin` in `src/lib/auth.ts`, which returns the admin or the 401/403 response to send. Behaviour and messages are unchanged. Adds tests for the delete route's refusals, which had none.",
+  "base": "next-prisma",
+  "branch": "require-admin-helper",
+  "clean": true,
+  "comments": []
+}

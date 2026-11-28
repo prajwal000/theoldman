@@ -1,0 +1,8 @@
+{
+  "title": "Limit product names to 200 characters",
+  "description": "A product added with a 5,000-character name broke the storefront layout. POST /api/products now refuses names longer than 200 characters after trimming. Includes a test and a README update.",
+  "base": "next-prisma",
+  "branch": "product-name-length",
+  "clean": true,
+  "comments": []
+}

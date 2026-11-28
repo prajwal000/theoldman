@@ -1,0 +1,14 @@
+{
+  "title": "Let admins delete spam accounts",
+  "description": "Bots are signing up in bulk. Adds DELETE /api/admin/users/:id so an admin can remove a customer account; admin accounts cannot be removed this way. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "delete-spam-accounts",
+  "comments": [
+    {
+      "id": "cascade-delete",
+      "file": "src/app/api/admin/users/[id]/route.ts",
+      "line": 19,
+      "issue": "Order has `onDelete: Cascade` on its user, so deleting an account also deletes all of that customer's orders, including paid ones: sales and accounting records disappear. Refuse accounts that have orders, or block/anonymise them instead of deleting."
+    }
+  ]
+}

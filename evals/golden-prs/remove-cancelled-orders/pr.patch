@@ -1,0 +1,88 @@
+diff --git a/README.md b/README.md
+index 28ad73e..1a81360 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `DELETE /api/orders/:id`   | Remove one of your cancelled orders.            |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/[id]/route.ts b/src/app/api/orders/[id]/route.ts
+new file mode 100644
+index 0000000..4ced14e
+--- /dev/null
++++ b/src/app/api/orders/[id]/route.ts
+@@ -0,0 +1,22 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function DELETE(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const { id } = await params;
++  const { count } = await db.order.deleteMany({
++    where: { id, userId: user.id, status: 'CANCELLED' },
++  });
++  if (count > 0) return new Response(null, { status: 204 });
++  const exists = (await db.order.count({ where: { id, userId: user.id } })) > 0;
++  return exists
++    ? jsonError(409, 'only cancelled orders can be removed')
++    : jsonError(404, 'order not found');
++}
+diff --git a/test/orders-remove.test.ts b/test/orders-remove.test.ts
+new file mode 100644
+index 0000000..e166be0
+--- /dev/null
++++ b/test/orders-remove.test.ts
+@@ -0,0 +1,43 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { DELETE } from '../src/app/api/orders/[id]/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string, status: 'PENDING' | 'PAID' | 'CANCELLED') {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 1, totalCents: 1200, status },
++  });
++}
++
++function remove(id: string, token: string) {
++  return DELETE(jsonRequest(`/api/orders/${id}`, { method: 'DELETE', token }), params({ id }));
++}
++
++describe('removing a cancelled order', () => {
++  it('removes a cancelled order from the history', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id, 'CANCELLED');
++    expect((await remove(order.id, token)).status).toBe(204);
++    expect(await db.order.findUnique({ where: { id: order.id } })).toBeNull();
++  });
++
++  it('refuses to remove an order that was not cancelled', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id, 'PAID');
++    try {
++      await remove(order.id, token);
++    } catch (error) {
++      expect(String(error)).toMatch(/only cancelled orders/);
++    }
++  });
++
++  it("does not find another customer's order", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const order = await orderFor(other.id, 'CANCELLED');
++    expect((await remove(order.id, token)).status).toBe(404);
++  });
++});

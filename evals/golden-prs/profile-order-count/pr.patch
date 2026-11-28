@@ -1,0 +1,63 @@
+diff --git a/README.md b/README.md
+index 28ad73e..5bed6da 100644
+--- a/README.md
++++ b/README.md
+@@ -34,7 +34,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
++| `GET /api/users/me`        | The signed-in user and their `orderCount`.      |
+ | `GET /api/products`        | All products, newest first.                     |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
+diff --git a/src/app/api/users/me/route.ts b/src/app/api/users/me/route.ts
+index e86341b..e15e508 100644
+--- a/src/app/api/users/me/route.ts
++++ b/src/app/api/users/me/route.ts
+@@ -1,8 +1,10 @@
+ import { getCurrentUser, publicUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
+ import { jsonError } from '../../../../lib/http';
+ 
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+-  return Response.json({ user: publicUser(user) });
++  const orderCount = await db.order.count({ where: { userId: user.id } });
++  return Response.json({ user: publicUser(user), orderCount });
+ }
+diff --git a/test/users-me-orders.test.ts b/test/users-me-orders.test.ts
+new file mode 100644
+index 0000000..4ae99a5
+--- /dev/null
++++ b/test/users-me-orders.test.ts
+@@ -0,0 +1,28 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET as me } from '../src/app/api/users/me/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('order count on the profile', () => {
++  it("counts the signed-in user's orders only", async () => {
++    const { user, token } = await createUser();
++    const { user: other } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    for (const userId of [user.id, user.id, other.id]) {
++      await db.order.create({
++        data: { userId, productId: product.id, quantity: 1, totalCents: 1200 },
++      });
++    }
++    const response = await me(jsonRequest('/api/users/me', { token }));
++    expect(await response.json()).toMatchObject({ user: { id: user.id }, orderCount: 2 });
++  });
++
++  it('gives 0 before the first order', async () => {
++    const { token } = await createUser();
++    expect(await (await me(jsonRequest('/api/users/me', { token }))).json()).toMatchObject({
++      orderCount: 0,
++    });
++  });
++});

@@ -1,0 +1,8 @@
+{
+  "title": "Keep the product list order stable",
+  "description": "Products imported in bulk share a `createdAt`, and the storefront showed them in a different order on each load. GET /api/products now breaks ties by id, so the order is the same every time. Includes a test and a README update.",
+  "base": "next-prisma",
+  "branch": "stable-product-order",
+  "clean": true,
+  "comments": []
+}

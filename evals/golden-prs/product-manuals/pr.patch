@@ -1,0 +1,105 @@
+diff --git a/README.md b/README.md
+index 28ad73e..a390389 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                               |
++| -------------------------- | -------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.    |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                      |
++| `GET /api/users/me`        | The signed-in user.                                |
++| `GET /api/products`        | All products, newest first.                        |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.       |
++| `GET /api/products/:id`    | One product.                                       |
++| `DELETE /api/products/:id` | Delete a product (admin).                          |
++| `GET /api/manuals`         | A product manual from `manuals/`: `?file=mug.pdf`. |
++| `GET /api/orders`          | The signed-in user's orders.                       |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.          |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/manuals/mug.pdf b/manuals/mug.pdf
+new file mode 100644
+index 0000000..801cf6f
+--- /dev/null
++++ b/manuals/mug.pdf
+@@ -0,0 +1,6 @@
++%PDF-1.4
++1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
++2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
++3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] >> endobj
++trailer << /Root 1 0 R >>
++%%EOF
+diff --git a/src/app/api/manuals/route.ts b/src/app/api/manuals/route.ts
+new file mode 100644
+index 0000000..ac503d5
+--- /dev/null
++++ b/src/app/api/manuals/route.ts
+@@ -0,0 +1,24 @@
++import { readFile } from 'node:fs/promises';
++import { join } from 'node:path';
++import { jsonError } from '../../../lib/http';
++
++/** Product manuals are PDFs kept in `manuals/` next to the app. */
++const MANUALS_DIR = join(process.cwd(), 'manuals');
++
++export async function GET(request: Request): Promise<Response> {
++  const file = new URL(request.url).searchParams.get('file');
++  if (file === null || !file.endsWith('.pdf')) return jsonError(400, 'file must name a PDF');
++
++  let pdf: Buffer;
++  try {
++    pdf = await readFile(join(MANUALS_DIR, file));
++  } catch {
++    return jsonError(404, 'manual not found');
++  }
++  return new Response(new Uint8Array(pdf), {
++    headers: {
++      'content-type': 'application/pdf',
++      'content-disposition': 'inline',
++    },
++  });
++}
+diff --git a/test/manuals.test.ts b/test/manuals.test.ts
+new file mode 100644
+index 0000000..8ed9136
+--- /dev/null
++++ b/test/manuals.test.ts
+@@ -0,0 +1,24 @@
++import { describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/manuals/route';
++import { jsonRequest } from './helpers';
++
++function manual(file: string) {
++  return GET(jsonRequest(`/api/manuals?file=${encodeURIComponent(file)}`));
++}
++
++describe('product manuals', () => {
++  it('serves a manual as a PDF', async () => {
++    const response = await manual('mug.pdf');
++    expect(response.status).toBe(200);
++    expect(response.headers.get('content-type')).toBe('application/pdf');
++    expect((await response.text()).startsWith('%PDF-')).toBe(true);
++  });
++
++  it('answers 404 for a manual that does not exist', async () => {
++    expect((await manual('kettle.pdf')).status).toBe(404);
++  });
++
++  it('refuses a file that is not a PDF', async () => {
++    expect((await manual('mug.txt')).status).toBe(400);
++  });
++});

@@ -1,0 +1,97 @@
+diff --git a/README.md b/README.md
+index 28ad73e..7326e9e 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/admin/sales`     | Paid orders from `?from=` to `&to=` (admin).    |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/sales/route.ts b/src/app/api/admin/sales/route.ts
+new file mode 100644
+index 0000000..4b63dce
+--- /dev/null
++++ b/src/app/api/admin/sales/route.ts
+@@ -0,0 +1,32 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++/** Midnight UTC of a `YYYY-MM-DD` day, or null when the value is not one. */
++function parseDay(value: string | null): Date | null {
++  if (value === null || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
++  const day = new Date(`${value}T00:00:00Z`);
++  // Date rolls 2026-02-30 over to March; a real day reads back unchanged.
++  return !Number.isNaN(day.getTime()) && day.toISOString().startsWith(value) ? day : null;
++}
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can see sales');
++
++  const query = new URL(request.url).searchParams;
++  const from = parseDay(query.get('from'));
++  const to = parseDay(query.get('from'));
++  if (from === null || to === null || to < from) {
++    return jsonError(400, 'from and to must be days (YYYY-MM-DD), from no later than to');
++  }
++  const sales = await db.order.aggregate({
++    where: { status: 'PAID', createdAt: { gte: from, lt: new Date(to.getTime() + DAY_MS) } },
++    _count: true,
++    _sum: { totalCents: true },
++  });
++  return Response.json({ orders: sales._count, totalCents: sales._sum.totalCents ?? 0 });
++}
+diff --git a/test/admin-sales.test.ts b/test/admin-sales.test.ts
+new file mode 100644
+index 0000000..5231e50
+--- /dev/null
++++ b/test/admin-sales.test.ts
+@@ -0,0 +1,42 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/admin/sales/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function paidOrder(userId: string, productId: string, at: string, totalCents: number) {
++  await db.order.create({
++    data: { userId, productId, quantity: 1, totalCents, status: 'PAID', createdAt: new Date(at) },
++  });
++}
++
++describe('sales report', () => {
++  it('totals the paid orders of the days asked for', async () => {
++    const { user, token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await paidOrder(user.id, product.id, '2026-11-02T08:00:00Z', 1200);
++    await paidOrder(user.id, product.id, '2026-11-02T23:59:00Z', 2400);
++    await paidOrder(user.id, product.id, '2026-11-03T00:00:00Z', 9900);
++    await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 1, totalCents: 500 },
++    });
++    const response = await GET(
++      jsonRequest('/api/admin/sales?from=2026-11-02&to=2026-11-02', { token }),
++    );
++    expect(await response.json()).toEqual({ orders: 2, totalCents: 3600 });
++  });
++
++  it('refuses a missing or malformed day', async () => {
++    const { token } = await createUser('ADMIN');
++    for (const query of ['', '?from=yesterday&to=2026-11-02', '?from=2026-02-30&to=2026-03-01']) {
++      expect((await GET(jsonRequest(`/api/admin/sales${query}`, { token }))).status).toBe(400);
++    }
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    const url = '/api/admin/sales?from=2026-11-02&to=2026-11-02';
++    expect((await GET(jsonRequest(url, { token }))).status).toBe(403);
++  });
++});

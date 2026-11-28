@@ -1,0 +1,14 @@
+{
+  "title": "Serve product manuals",
+  "description": "Product pages link to PDF manuals. Adds `manuals/` for the PDFs, with the first one, and GET /api/manuals?file= to serve them. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "product-manuals",
+  "comments": [
+    {
+      "id": "path-traversal",
+      "file": "src/app/api/manuals/route.ts",
+      "line": 14,
+      "issue": "`file` comes from the query string and is joined to the folder unchecked, so `?file=../../somewhere/secret.pdf` (or an absolute path) reads any PDF the server can reach: path traversal. Allow only plain file names, or check the resolved path stays inside `manuals/`."
+    }
+  ]
+}

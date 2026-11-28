@@ -1,0 +1,122 @@
+diff --git a/README.md b/README.md
+index 28ad73e..418d6a6 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                         | What                                            |
++| ----------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`       | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`        | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`           | The signed-in user.                             |
++| `GET /api/products`           | All products, newest first.                     |
++| `POST /api/products`          | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`       | One product.                                    |
++| `DELETE /api/products/:id`    | Delete a product (admin).                       |
++| `GET /api/orders`             | The signed-in user's orders.                    |
++| `POST /api/orders`            | Order a product: `productId`, `quantity`.       |
++| `POST /api/orders/:id/cancel` | Cancel one of your pending orders.              |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/[id]/cancel/route.ts b/src/app/api/orders/[id]/cancel/route.ts
+new file mode 100644
+index 0000000..d5eff62
+--- /dev/null
++++ b/src/app/api/orders/[id]/cancel/route.ts
+@@ -0,0 +1,26 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function POST(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const { id } = await params;
++  // One conditional update, so an order paid at the same moment cannot also be cancelled.
++  const { count } = await db.order.updateMany({
++    where: { id, userId: user.id, status: 'PENDING' },
++    data: { status: 'CANCELLED' },
++  });
++  if (count === 0) {
++    const exists = (await db.order.count({ where: { id, userId: user.id } })) > 0;
++    return exists
++      ? jsonError(409, 'only pending orders can be cancelled')
++      : jsonError(404, 'order not found');
++  }
++  return Response.json({ id, status: 'CANCELLED' });
++}
+diff --git a/test/orders-cancel.test.ts b/test/orders-cancel.test.ts
+new file mode 100644
+index 0000000..0406a22
+--- /dev/null
++++ b/test/orders-cancel.test.ts
+@@ -0,0 +1,51 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as cancel } from '../src/app/api/orders/[id]/cancel/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string, status: 'PENDING' | 'PAID' | 'CANCELLED' = 'PENDING') {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 1, totalCents: 1200, status },
++  });
++}
++
++function cancelOrder(id: string, token?: string) {
++  return cancel(jsonRequest(`/api/orders/${id}/cancel`, { method: 'POST', token }), params({ id }));
++}
++
++describe('cancelling an order', () => {
++  it('cancels a pending order', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id);
++    const response = await cancelOrder(order.id, token);
++    expect(response.status).toBe(200);
++    const stored = await db.order.findUniqueOrThrow({ where: { id: order.id } });
++    expect(stored.status).toBe('CANCELLED');
++  });
++
++  it('refuses a paid or already cancelled order', async () => {
++    const { user, token } = await createUser();
++    for (const status of ['PAID', 'CANCELLED'] as const) {
++      const order = await orderFor(user.id, status);
++      expect((await cancelOrder(order.id, token)).status).toBe(409);
++      const stored = await db.order.findUniqueOrThrow({ where: { id: order.id } });
++      expect(stored.status).toBe(status);
++    }
++  });
++
++  it("does not find another customer's order", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const order = await orderFor(other.id);
++    expect((await cancelOrder(order.id, token)).status).toBe(404);
++    const stored = await db.order.findUniqueOrThrow({ where: { id: order.id } });
++    expect(stored.status).toBe('PENDING');
++  });
++
++  it('refuses anonymous requests', async () => {
++    expect((await cancelOrder('any')).status).toBe(401);
++  });
++});

@@ -1,0 +1,14 @@
+{
+  "title": "Let admins create coupon codes",
+  "description": "First step towards discounts: a Coupon table and GET/POST /api/admin/coupons for admins to list and create codes with a percentage off. Codes are case-insensitive and each code can exist only once. Applying coupons to orders comes next. Includes the migration, tests and README entries.",
+  "base": "next-prisma",
+  "branch": "coupon-codes",
+  "comments": [
+    {
+      "id": "no-unique",
+      "file": "src/app/api/admin/coupons/route.ts",
+      "line": 36,
+      "issue": "Codes are kept unique only by this check-then-insert, with no unique constraint on `Coupon.code`, so two concurrent requests can both pass the check and create the same code twice, and later lookups by code become ambiguous. Add `@unique` to `code` (and handle the P2002 error)."
+    }
+  ]
+}

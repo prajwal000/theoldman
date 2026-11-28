@@ -1,0 +1,109 @@
+diff --git a/src/app/api/products/[id]/route.ts b/src/app/api/products/[id]/route.ts
+index c357885..2272ad8 100644
+--- a/src/app/api/products/[id]/route.ts
++++ b/src/app/api/products/[id]/route.ts
+@@ -1,4 +1,4 @@
+-import { getCurrentUser } from '../../../../lib/auth';
++import { requireAdmin } from '../../../../lib/auth';
+ import { db } from '../../../../lib/db';
+ import { jsonError } from '../../../../lib/http';
+ 
+@@ -14,9 +14,8 @@ export async function GET(_request: Request, { params }: Context): Promise<Respo
+ }
+ 
+ export async function DELETE(request: Request, { params }: Context): Promise<Response> {
+-  const user = await getCurrentUser(request);
+-  if (user === null) return jsonError(401, 'sign in first');
+-  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can delete products');
++  const admin = await requireAdmin(request, 'delete products');
++  if (admin instanceof Response) return admin;
+ 
+   const { id } = await params;
+   const { count } = await db.product.deleteMany({ where: { id } });
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..73fb4a9 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -1,4 +1,4 @@
+-import { getCurrentUser } from '../../../lib/auth';
++import { requireAdmin } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+@@ -8,9 +8,8 @@ export async function GET(): Promise<Response> {
+ }
+ 
+ export async function POST(request: Request): Promise<Response> {
+-  const user = await getCurrentUser(request);
+-  if (user === null) return jsonError(401, 'sign in first');
+-  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can add products');
++  const admin = await requireAdmin(request, 'add products');
++  if (admin instanceof Response) return admin;
+ 
+   const body = await readJson(request);
+   if (
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..c0f5c4d 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
+ import bcrypt from 'bcryptjs';
+ import type { User } from '../generated/prisma/client';
+ import { db } from './db';
++import { jsonError } from './http';
+ 
+ const SESSION_DAYS = 30;
+ export const MIN_PASSWORD_LENGTH = 8;
+@@ -50,6 +51,14 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+   return session.user;
+ }
+ 
++/** The signed-in admin, or the 401 or 403 response to send instead; `action` ends the 403 message. */
++export async function requireAdmin(request: Request, action: string): Promise<User | Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, `only admins can ${action}`);
++  return user;
++}
++
+ export function publicUser(user: User) {
+   return { id: user.id, email: user.email, name: user.name, role: user.role };
+ }
+diff --git a/test/products-admin.test.ts b/test/products-admin.test.ts
+new file mode 100644
+index 0000000..f970e11
+--- /dev/null
++++ b/test/products-admin.test.ts
+@@ -0,0 +1,32 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { DELETE } from '../src/app/api/products/[id]/route';
++import { POST } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function remove(id: string, token?: string) {
++  return DELETE(jsonRequest(`/api/products/${id}`, { method: 'DELETE', token }), params({ id }));
++}
++
++describe('admin checks on product routes', () => {
++  it('refuses to delete for customers and anonymous requests, keeping the product', async () => {
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    const { token } = await createUser();
++    const customer = await remove(product.id, token);
++    expect(customer.status).toBe(403);
++    expect(await customer.json()).toEqual({ error: 'only admins can delete products' });
++    expect((await remove(product.id)).status).toBe(401);
++    expect(await db.product.count()).toBe(1);
++  });
++
++  it('keeps the messages for adding a product', async () => {
++    const { token } = await createUser();
++    const body = { name: 'Mug', priceCents: 1200 };
++    const customer = await POST(jsonRequest('/api/products', { body, token }));
++    expect(await customer.json()).toEqual({ error: 'only admins can add products' });
++    const anonymous = await POST(jsonRequest('/api/products', { body }));
++    expect(await anonymous.json()).toEqual({ error: 'sign in first' });
++  });
++});

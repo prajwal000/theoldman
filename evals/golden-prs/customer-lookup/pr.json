@@ -1,0 +1,14 @@
+{
+  "title": "Let support look up a customer by email",
+  "description": "Support staff need to find a customer from the email address they give over the phone. Adds GET /api/admin/users?email= for admins, with the customer and their number of orders. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "customer-lookup",
+  "comments": [
+    {
+      "id": "email-case",
+      "file": "src/app/api/admin/users/route.ts",
+      "line": 14,
+      "issue": "Signup and login store and match emails trimmed and lowercased, but the lookup uses the email exactly as typed, so `Ada@Example.com` or a trailing space finds no customer; normalise it the same way first."
+    }
+  ]
+}

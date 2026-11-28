@@ -1,0 +1,14 @@
+diff --git a/README.md b/README.md
+index 28ad73e..26c4d30 100644
+--- a/README.md
++++ b/README.md
+@@ -43,3 +43,9 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
++
++## Errors
++
++Errors the API expects, such as bad input, a missing sign-in or something not found, come back as JSON, `{ "error": "<message>" }`, with a 4xx status. Signed-in routes answer 401 without a valid token, and admin routes answer 403 to customers.
++
++An order can have at most 100 of one product; `POST /api/orders` refuses a larger `quantity` with 400.

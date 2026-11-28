@@ -1,0 +1,71 @@
+diff --git a/README.md b/README.md
+index 28ad73e..33b8f11 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
++| `POST /api/auth/logout`    | Sign out this session.                          |
+ | `GET /api/users/me`        | The signed-in user.                             |
+ | `GET /api/products`        | All products, newest first.                     |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+diff --git a/src/app/api/auth/logout/route.ts b/src/app/api/auth/logout/route.ts
+new file mode 100644
+index 0000000..681ecbb
+--- /dev/null
++++ b/src/app/api/auth/logout/route.ts
+@@ -0,0 +1,6 @@
++import { endSession } from '../../../../lib/auth';
++
++export async function POST(request: Request): Promise<Response> {
++  await endSession(request);
++  return new Response(null, { status: 204 });
++}
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..c211e4a 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -50,6 +50,13 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+   return session.user;
+ }
+ 
++/** Deletes the session the request is signed in with, if it has one. */
++export async function endSession(request: Request): Promise<void> {
++  const token = sessionToken(request);
++  if (token === undefined) return;
++  await db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
++}
++
+ export function publicUser(user: User) {
+   return { id: user.id, email: user.email, name: user.name, role: user.role };
+ }
+diff --git a/test/sign-out.test.ts b/test/sign-out.test.ts
+new file mode 100644
+index 0000000..319d4a7
+--- /dev/null
++++ b/test/sign-out.test.ts
+@@ -0,0 +1,23 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as logout } from '../src/app/api/auth/logout/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { createSession } from '../src/lib/auth';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('signing out', () => {
++  it('ends this session only', async () => {
++    const { user, token } = await createUser();
++    const phone = await createSession(user.id);
++    expect((await logout(jsonRequest('/api/auth/logout', { method: 'POST', token }))).status).toBe(
++      204,
++    );
++    expect((await me(jsonRequest('/api/users/me', { token }))).status).toBe(401);
++    expect((await me(jsonRequest('/api/users/me', { token: phone }))).status).toBe(200);
++  });
++
++  it('answers 204 without a session', async () => {
++    expect((await logout(jsonRequest('/api/auth/logout', { method: 'POST' }))).status).toBe(204);
++  });
++});

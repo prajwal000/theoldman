@@ -1,0 +1,90 @@
+diff --git a/README.md b/README.md
+index 28ad73e..11b9705 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                        | What                                            |
++| ---------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`      | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`       | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`          | The signed-in user.                             |
++| `GET /api/users/me/sessions` | Your unexpired sessions, newest first.          |
++| `GET /api/products`          | All products, newest first.                     |
++| `POST /api/products`         | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`      | One product.                                    |
++| `DELETE /api/products/:id`   | Delete a product (admin).                       |
++| `GET /api/orders`            | The signed-in user's orders.                    |
++| `POST /api/orders`           | Order a product: `productId`, `quantity`.       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/users/me/sessions/route.ts b/src/app/api/users/me/sessions/route.ts
+new file mode 100644
+index 0000000..45f47b2
+--- /dev/null
++++ b/src/app/api/users/me/sessions/route.ts
+@@ -0,0 +1,15 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const sessions = await db.session.findMany({
++    where: { userId: user.id, expiresAt: { gt: new Date() } },
++    select: { id: true, createdAt: true, expiresAt: true },
++    orderBy: { createdAt: 'desc' },
++  });
++  return Response.json(sessions);
++}
+diff --git a/test/users-me-sessions.test.ts b/test/users-me-sessions.test.ts
+new file mode 100644
+index 0000000..bf8b9b4
+--- /dev/null
++++ b/test/users-me-sessions.test.ts
+@@ -0,0 +1,30 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/users/me/sessions/route';
++import { createSession } from '../src/lib/auth';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('your sessions', () => {
++  it('lists your current sessions without their token hashes', async () => {
++    const { user, token } = await createUser();
++    await createSession(user.id);
++    await createUser();
++    const expired = await db.session.create({
++      data: { userId: user.id, tokenHash: 'old', expiresAt: new Date(Date.now() - 1000) },
++    });
++
++    const response = await GET(jsonRequest('/api/users/me/sessions', { token }));
++    const sessions = (await response.json()) as Record<string, unknown>[];
++    expect(sessions).toHaveLength(2);
++    expect(sessions.map((session) => session.id)).not.toContain(expired.id);
++    for (const session of sessions) {
++      expect(Object.keys(session).sort()).toEqual(['createdAt', 'expiresAt', 'id']);
++    }
++  });
++
++  it('refuses anonymous requests', async () => {
++    expect((await GET(jsonRequest('/api/users/me/sessions'))).status).toBe(401);
++  });
++});

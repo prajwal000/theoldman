@@ -1,0 +1,8 @@
+{
+  "title": "Add a health check for the load balancer",
+  "description": "The load balancer needs an endpoint to probe. Adds GET /api/health: 200 while the app can reach the database, 503 when it cannot. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "health-check",
+  "clean": true,
+  "comments": []
+}

@@ -1,0 +1,14 @@
+{
+  "title": "Document the API's errors and order limits",
+  "description": "The mobile team asked what errors to expect. Adds an Errors section to the README.",
+  "base": "next-prisma",
+  "branch": "document-errors",
+  "comments": [
+    {
+      "id": "unenforced-limit",
+      "file": "README.md",
+      "line": 51,
+      "issue": "Nothing enforces this: `POST /api/orders` accepts any whole quantity of 1 or more, so the documented 400 never happens and clients relying on the limit are misled. Either add the check or drop the sentence."
+    }
+  ]
+}
