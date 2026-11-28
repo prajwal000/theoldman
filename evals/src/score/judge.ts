@@ -50,7 +50,11 @@ export function judgePrompt(
   parts: readonly string[],
 ): string {
   const golden = JSON.stringify(
-    comments.map(({ id, file, line, issue }) => ({ id, file, line, issue })),
+    comments.map((comment) =>
+      'in' in comment
+        ? { id: comment.id, in: comment.in, issue: comment.issue }
+        : { id: comment.id, file: comment.file, line: comment.line, issue: comment.issue },
+    ),
     null,
     2,
   );

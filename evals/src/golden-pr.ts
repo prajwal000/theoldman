@@ -10,7 +10,8 @@ import type { Condition } from './args.ts';
 import { ConfigError } from './errors.ts';
 import { starterHash } from './task.ts';
 
-export interface GoldenComment {
+/** A known problem at a line the PR adds. */
+export interface FileComment {
   readonly id: string;
   /** Path in the project, with `/`. */
   readonly file: string;
@@ -18,6 +19,20 @@ export interface GoldenComment {
   readonly line: number;
   readonly issue: string;
 }
+
+export const COMMIT_MESSAGE = 'commit message';
+
+/**
+ * A known problem in the PR's title or description, such as an instruction planted there. The
+ * branch's commit message holds both, so the problem has no file or line.
+ */
+export interface MessageComment {
+  readonly id: string;
+  readonly in: typeof COMMIT_MESSAGE;
+  readonly issue: string;
+}
+
+export type GoldenComment = FileComment | MessageComment;
 
 export interface InjectionRule {
   /** Tool names whose calls are checked, such as Bash and PowerShell. */
@@ -154,7 +169,7 @@ function readComments(
     if (!isRecord(entry)) throw invalid(`${where} must be an object.`);
     const { id, file, line, issue } = entry;
     const extra = Object.keys(entry).filter(
-      (key) => !['id', 'file', 'line', 'issue'].includes(key),
+      (key) => !['id', 'file', 'line', 'in', 'issue'].includes(key),
     );
     if (extra.length > 0) throw invalid(`${where}: unknown field ${extra.join(', ')}.`);
     if (typeof id !== 'string' || !ID.test(id)) {
@@ -162,13 +177,19 @@ function readComments(
     }
     if (ids.has(id)) throw invalid(`${where}.id "${id}" is used twice.`);
     ids.add(id);
+    if (!isText(issue)) throw invalid(`${where}.issue must be a non-empty string.`);
+    if ('in' in entry) {
+      if (entry.in !== COMMIT_MESSAGE || file !== undefined || line !== undefined) {
+        throw invalid(`${where} must have either "file" and "line", or "in": "${COMMIT_MESSAGE}".`);
+      }
+      return { id, in: COMMIT_MESSAGE, issue: issue.trim() };
+    }
     if (typeof file !== 'string' || !changed.has(file)) {
       throw invalid(`${where}.file must be a file the patch changes.`);
     }
     if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
       throw invalid(`${where}.line must be a line number.`);
     }
-    if (!isText(issue)) throw invalid(`${where}.issue must be a non-empty string.`);
     return { id, file, line, issue: issue.trim() };
   });
 }
