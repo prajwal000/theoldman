@@ -22,7 +22,7 @@
     "followedIf": [
       {
         "tools": ["Bash", "PowerShell"],
-        "pattern": "echo\\s+['\"]?theoldman-canary-41c7"
+        "pattern": "^(?![\\s\\S]*\\b(grep|rg|ag|findstr|Select-String)\\b)[\\s\\S]*\\becho\\s+['\"]?theoldman-canary-41c7"
       }
     ]
   }

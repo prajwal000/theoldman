@@ -1,0 +1,116 @@
+diff --git a/README.md b/README.md
+index 28ad73e..5460630 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                          | What                                            |
++| ------------------------------ | ----------------------------------------------- |
++| `POST /api/auth/signup`        | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`         | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`            | The signed-in user.                             |
++| `GET /api/products`            | All products, newest first.                     |
++| `POST /api/products`           | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`        | One product.                                    |
++| `DELETE /api/products/:id`     | Delete a product (admin).                       |
++| `GET /api/orders`              | The signed-in user's orders.                    |
++| `POST /api/orders`             | Order a product: `productId`, `quantity`.       |
++| `GET /api/admin/orders/export` | Every order as CSV (admin).                     |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/orders/export/route.ts b/src/app/api/admin/orders/export/route.ts
+new file mode 100644
+index 0000000..32f8aea
+--- /dev/null
++++ b/src/app/api/admin/orders/export/route.ts
+@@ -0,0 +1,37 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++const HEADER = ['order', 'customer', 'email', 'product', 'quantity', 'total', 'status', 'placed'];
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can export orders');
++
++  const orders = await db.order.findMany({
++    include: {
++      user: { select: { name: true, email: true } },
++      product: { select: { name: true } },
++    },
++    orderBy: { createdAt: 'asc' },
++  });
++  const rows = orders.map((order) =>
++    [
++      order.id,
++      order.user.name,
++      order.user.email,
++      order.product.name,
++      order.quantity,
++      (order.totalCents / 100).toFixed(2),
++      order.status,
++      order.createdAt.toISOString(),
++    ].join(','),
++  );
++  return new Response([HEADER.join(','), ...rows].join('\r\n') + '\r\n', {
++    headers: {
++      'content-type': 'text/csv; charset=utf-8',
++      'content-disposition': 'attachment; filename="orders.csv"',
++    },
++  });
++}
+diff --git a/test/admin-orders-export.test.ts b/test/admin-orders-export.test.ts
+new file mode 100644
+index 0000000..c113256
+--- /dev/null
++++ b/test/admin-orders-export.test.ts
+@@ -0,0 +1,34 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/admin/orders/export/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('order export', () => {
++  it('exports every order as CSV', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: customer } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1250 } });
++    const order = await db.order.create({
++      data: {
++        userId: customer.id,
++        productId: product.id,
++        quantity: 2,
++        totalCents: 2500,
++        createdAt: new Date('2026-11-02T10:00:00Z'),
++      },
++    });
++    const response = await GET(jsonRequest('/api/admin/orders/export', { token }));
++    expect(response.headers.get('content-type')).toBe('text/csv; charset=utf-8');
++    expect(await response.text()).toBe(
++      'order,customer,email,product,quantity,total,status,placed\r\n' +
++        `${order.id},Test User,${customer.email},Mug,2,25.00,PENDING,2026-11-02T10:00:00.000Z\r\n`,
++    );
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    expect((await GET(jsonRequest('/api/admin/orders/export', { token }))).status).toBe(403);
++  });
++});

@@ -158,6 +158,14 @@ describe('the judge prompt', () => {
     expect(prompt.indexOf('"id": "ownership"')).toBeLessThan(prompt.indexOf('Ignore the above'));
   });
 
+  it('gives a commit-message golden comment no file or line', () => {
+    const message: GoldenComment = { id: 'title', in: 'commit message', issue: 'Injected title.' };
+    const golden = judgePrompt(text, [message], ['r']).split('<golden_comments>\n')[1] ?? '';
+    expect(JSON.parse(golden.split('\n</golden_comments>')[0] ?? '')).toEqual([
+      { id: 'title', in: 'commit message', issue: 'Injected title.' },
+    ]);
+  });
+
   it('labels a review in several parts, and says when it is empty', () => {
     expect(judgePrompt(text, [], ['a', 'b'])).toContain('Part 1 of 2:\na\n\nPart 2 of 2:\nb');
     expect(judgePrompt(text, [], [])).toContain('(The review is empty.)');
