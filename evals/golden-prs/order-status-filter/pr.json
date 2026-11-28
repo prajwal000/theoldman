@@ -1,0 +1,14 @@
+{
+  "title": "Filter the order list by status",
+  "description": "The order history page gets an 'awaiting payment' tab. GET /api/orders takes an optional order status to filter by, and refuses an unknown one. Includes tests and a README update.",
+  "base": "next-prisma",
+  "branch": "order-status-filter",
+  "comments": [
+    {
+      "id": "wrong-param",
+      "file": "README.md",
+      "line": 42,
+      "issue": "The README documents the filter as `?state=`, but the route reads `status`, so a client following the docs gets every order back unfiltered."
+    }
+  ]
+}

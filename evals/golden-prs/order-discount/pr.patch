@@ -1,0 +1,83 @@
+diff --git a/README.md b/README.md
+index 28ad73e..b7eba10 100644
+--- a/README.md
++++ b/README.md
+@@ -42,4 +42,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
++`POST /api/orders` takes 10% off orders of 10 or more of one product, rounded to the cent.
++
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..4218519 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -2,6 +2,17 @@ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
++const BULK_QUANTITY = 10;
++const BULK_DISCOUNT_PERCENT = 10;
++
++function orderTotal(priceCents: number, quantity: number): number {
++  const subtotal = priceCents * quantity;
++  if (quantity > BULK_QUANTITY) {
++    return Math.round((subtotal * (100 - BULK_DISCOUNT_PERCENT)) / 100);
++  }
++  return subtotal;
++}
++
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+@@ -35,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
+       userId: user.id,
+       productId: product.id,
+       quantity: body.quantity,
+-      totalCents: product.priceCents * body.quantity,
++      totalCents: orderTotal(product.priceCents, body.quantity),
+     },
+   });
+   return Response.json(order, { status: 201 });
+diff --git a/test/orders-discount.test.ts b/test/orders-discount.test.ts
+new file mode 100644
+index 0000000..9145585
+--- /dev/null
++++ b/test/orders-discount.test.ts
+@@ -0,0 +1,35 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/orders/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function order(quantity: number): Promise<{ totalCents: number }> {
++  const { token } = await createUser();
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1000 } });
++  const response = await POST(
++    jsonRequest('/api/orders', { body: { productId: product.id, quantity }, token }),
++  );
++  expect(response.status).toBe(201);
++  return (await response.json()) as { totalCents: number };
++}
++
++describe('bulk discount', () => {
++  it('takes 10% off a large order', async () => {
++    expect((await order(20)).totalCents).toBe(18000);
++  });
++
++  it('rounds the discounted total to the cent', async () => {
++    const { token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Pen', priceCents: 199 } });
++    const response = await POST(
++      jsonRequest('/api/orders', { body: { productId: product.id, quantity: 15 }, token }),
++    );
++    expect(await response.json()).toMatchObject({ totalCents: 2687 });
++  });
++
++  it('charges full price for a small order', async () => {
++    expect((await order(2)).totalCents).toBe(2000);
++  });
++});

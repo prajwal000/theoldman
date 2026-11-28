@@ -1,0 +1,109 @@
+diff --git a/README.md b/README.md
+index 28ad73e..f858fc0 100644
+--- a/README.md
++++ b/README.md
+@@ -42,4 +42,4 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
+-Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
++Placing an order emails the customer a confirmation. Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..469ca46 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -1,5 +1,6 @@
+ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
++import { senderAddress, sendEmail } from '../../../lib/email';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+ export async function GET(request: Request): Promise<Response> {
+@@ -27,6 +28,7 @@ export async function POST(request: Request): Promise<Response> {
+   ) {
+     return jsonError(400, 'productId and a whole, positive quantity are required');
+   }
++  const from = senderAddress();
+   const product = await db.product.findUnique({ where: { id: body.productId } });
+   if (product === null) return jsonError(404, 'product not found');
+ 
+@@ -38,5 +40,11 @@ export async function POST(request: Request): Promise<Response> {
+       totalCents: product.priceCents * body.quantity,
+     },
+   });
++  await sendEmail({
++    from,
++    to: user.email,
++    subject: `Your order of ${product.name}`,
++    text: `Thanks for your order: ${body.quantity} x ${product.name}, ${(order.totalCents / 100).toFixed(2)} in total. Order ${order.id}.`,
++  });
+   return Response.json(order, { status: 201 });
+ }
+diff --git a/src/lib/email.ts b/src/lib/email.ts
+index 7126032..5e25ea9 100644
+--- a/src/lib/email.ts
++++ b/src/lib/email.ts
+@@ -1,4 +1,5 @@
+ export interface Email {
++  readonly from: string;
+   readonly to: string;
+   readonly subject: string;
+   readonly text: string;
+@@ -14,3 +15,10 @@ export function sendEmail(email: Email): Promise<void> {
+   outbox.push(email);
+   return Promise.resolve();
+ }
++
++/** The address shop emails are sent from. Fails loudly rather than sending from a guess. */
++export function senderAddress(): string {
++  const from = process.env.EMAIL_FROM;
++  if (from === undefined || from.trim() === '') throw new Error('EMAIL_FROM is not set');
++  return from;
++}
+diff --git a/test/orders-email.test.ts b/test/orders-email.test.ts
+new file mode 100644
+index 0000000..bbd09d4
+--- /dev/null
++++ b/test/orders-email.test.ts
+@@ -0,0 +1,41 @@
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/orders/route';
++import { db } from '../src/lib/db';
++import { outbox } from '../src/lib/email';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(async () => {
++  await resetDatabase();
++  outbox.length = 0;
++  process.env.EMAIL_FROM = 'Shop <orders@shop.example>';
++});
++
++afterEach(() => {
++  delete process.env.EMAIL_FROM;
++});
++
++describe('order confirmation email', () => {
++  it('emails the customer when they place an order', async () => {
++    const { user, token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1250 } });
++    const response = await POST(
++      jsonRequest('/api/orders', { body: { productId: product.id, quantity: 2 }, token }),
++    );
++    expect(response.status).toBe(201);
++    const { id } = (await response.json()) as { id: string };
++    expect(outbox).toEqual([
++      {
++        from: 'Shop <orders@shop.example>',
++        to: user.email,
++        subject: 'Your order of Mug',
++        text: `Thanks for your order: 2 x Mug, 25.00 in total. Order ${id}.`,
++      },
++    ]);
++  });
++
++  it('sends nothing when the order fails', async () => {
++    const { token } = await createUser();
++    await POST(jsonRequest('/api/orders', { body: { productId: 'missing', quantity: 1 }, token }));
++    expect(outbox).toEqual([]);
++  });
++});

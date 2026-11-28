@@ -1,0 +1,146 @@
+diff --git a/README.md b/README.md
+index 28ad73e..2a887d1 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                  |
++| -------------------------- | ----------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.       |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                         |
++| `GET /api/users/me`        | The signed-in user.                                   |
++| `GET /api/products`        | All products, newest first.                           |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`, `stock`. |
++| `GET /api/products/:id`    | One product.                                          |
++| `DELETE /api/products/:id` | Delete a product (admin).                             |
++| `GET /api/orders`          | The signed-in user's orders.                          |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.             |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261202093000_product_stock/migration.sql b/prisma/migrations/20261202093000_product_stock/migration.sql
+new file mode 100644
+index 0000000..702836d
+--- /dev/null
++++ b/prisma/migrations/20261202093000_product_stock/migration.sql
+@@ -0,0 +1,2 @@
++-- AlterTable
++ALTER TABLE "Product" ADD COLUMN     "stock" INTEGER NOT NULL;
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..266268f 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -42,6 +42,7 @@ model Product {
+   id         String   @id @default(cuid())
+   name       String
+   priceCents Int
++  stock      Int
+   createdAt  DateTime @default(now())
+   orders     Order[]
+ }
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..b89e13b 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -7,6 +7,9 @@ export async function GET(): Promise<Response> {
+   return Response.json(products);
+ }
+ 
++const isCount = (value: unknown): value is number =>
++  typeof value === 'number' && Number.isInteger(value) && value >= 0;
++
+ export async function POST(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+@@ -17,14 +20,13 @@ export async function POST(request: Request): Promise<Response> {
+     !isRecord(body) ||
+     typeof body.name !== 'string' ||
+     body.name.trim() === '' ||
+-    typeof body.priceCents !== 'number' ||
+-    !Number.isInteger(body.priceCents) ||
+-    body.priceCents < 0
++    !isCount(body.priceCents) ||
++    !isCount(body.stock)
+   ) {
+-    return jsonError(400, 'name and a whole, non-negative priceCents are required');
++    return jsonError(400, 'name and whole, non-negative priceCents and stock are required');
+   }
+   const product = await db.product.create({
+-    data: { name: body.name.trim(), priceCents: body.priceCents },
++    data: { name: body.name.trim(), priceCents: body.priceCents, stock: body.stock },
+   });
+   return Response.json(product, { status: 201 });
+ }
+diff --git a/test/products.test.ts b/test/products.test.ts
+index a2391a2..17fa008 100644
+--- a/test/products.test.ts
++++ b/test/products.test.ts
+@@ -10,30 +10,50 @@ describe('products', () => {
+   it('lets an admin add a product', async () => {
+     const { token } = await createUser('ADMIN');
+     const response = await POST(
+-      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1200 }, token }),
++      jsonRequest('/api/products', {
++        body: { name: 'Mug', priceCents: 1200, stock: 30 },
++        token,
++      }),
+     );
+     expect(response.status).toBe(201);
+-    expect(await response.json()).toMatchObject({ name: 'Mug', priceCents: 1200 });
++    expect(await response.json()).toMatchObject({ name: 'Mug', priceCents: 1200, stock: 30 });
++  });
++
++  it('refuses a missing or negative stock', async () => {
++    const { token } = await createUser('ADMIN');
++    for (const stock of [undefined, -1, 2.5]) {
++      const response = await POST(
++        jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1200, stock }, token }),
++      );
++      expect(response.status).toBe(400);
++    }
+   });
+ 
+   it('refuses customers', async () => {
+     const { token } = await createUser();
+     const response = await POST(
+-      jsonRequest('/api/products', { body: { name: 'Mug', priceCents: 1200 }, token }),
++      jsonRequest('/api/products', {
++        body: { name: 'Mug', priceCents: 1200, stock: 30 },
++        token,
++      }),
+     );
+     expect(response.status).toBe(403);
+   });
+ 
+   it('lists products newest first', async () => {
+-    await db.product.create({ data: { name: 'Old', priceCents: 1, createdAt: new Date(1000) } });
+-    await db.product.create({ data: { name: 'New', priceCents: 1, createdAt: new Date(2000) } });
++    await db.product.create({
++      data: { name: 'Old', priceCents: 1, stock: 1, createdAt: new Date(1000) },
++    });
++    await db.product.create({
++      data: { name: 'New', priceCents: 1, stock: 1, createdAt: new Date(2000) },
++    });
+     const products = (await (await GET()).json()) as { name: string }[];
+     expect(products.map((product) => product.name)).toEqual(['New', 'Old']);
+   });
+ 
+   it('deletes a product', async () => {
+     const { token } = await createUser('ADMIN');
+-    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1 } });
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1, stock: 1 } });
+     const response = await DELETE(
+       jsonRequest(`/api/products/${product.id}`, { method: 'DELETE', token }),
+       params({ id: product.id }),

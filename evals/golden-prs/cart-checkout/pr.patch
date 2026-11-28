@@ -1,0 +1,148 @@
+diff --git a/README.md b/README.md
+index 28ad73e..ba7fce4 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                |
++| -------------------------- | --------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.     |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                       |
++| `GET /api/users/me`        | The signed-in user.                                 |
++| `GET /api/products`        | All products, newest first.                         |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.        |
++| `GET /api/products/:id`    | One product.                                        |
++| `DELETE /api/products/:id` | Delete a product (admin).                           |
++| `GET /api/orders`          | The signed-in user's orders.                        |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.           |
++| `POST /api/orders/batch`   | Order a cart: `items` of `{ productId, quantity }`. |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/batch/route.ts b/src/app/api/orders/batch/route.ts
+new file mode 100644
+index 0000000..b65cbcf
+--- /dev/null
++++ b/src/app/api/orders/batch/route.ts
+@@ -0,0 +1,59 @@
++import type { Order } from '../../../../generated/prisma/client';
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
++
++const MAX_ITEMS = 20;
++
++interface Item {
++  readonly productId: string;
++  readonly quantity: number;
++}
++
++function isItem(value: unknown): value is Item {
++  return (
++    isRecord(value) &&
++    typeof value.productId === 'string' &&
++    typeof value.quantity === 'number' &&
++    Number.isInteger(value.quantity) &&
++    value.quantity >= 1
++  );
++}
++
++export async function POST(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const body = await readJson(request);
++  const items: unknown = isRecord(body) ? body.items : undefined;
++  if (
++    !Array.isArray(items) ||
++    items.length === 0 ||
++    items.length > MAX_ITEMS ||
++    !items.every(isItem)
++  ) {
++    return jsonError(400, `items must be a list of 1 to ${MAX_ITEMS} { productId, quantity }`);
++  }
++
++  const products = await db.product.findMany({
++    where: { id: { in: items.map((item) => item.productId) } },
++  });
++  const byId = new Map(products.map((product) => [product.id, product]));
++
++  const orders: Order[] = [];
++  for (const item of items) {
++    const product = byId.get(item.productId);
++    if (product === undefined) return jsonError(404, `product ${item.productId} not found`);
++    orders.push(
++      await db.order.create({
++        data: {
++          userId: user.id,
++          productId: product.id,
++          quantity: item.quantity,
++          totalCents: product.priceCents * item.quantity,
++        },
++      }),
++    );
++  }
++  return Response.json(orders, { status: 201 });
++}
+diff --git a/test/orders-batch.test.ts b/test/orders-batch.test.ts
+new file mode 100644
+index 0000000..4ad779b
+--- /dev/null
++++ b/test/orders-batch.test.ts
+@@ -0,0 +1,44 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/orders/batch/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function checkout(items: unknown, token: string) {
++  return POST(jsonRequest('/api/orders/batch', { body: { items }, token }));
++}
++
++describe('cart checkout', () => {
++  it('orders every item in the cart', async () => {
++    const { user, token } = await createUser();
++    const mug = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    const plate = await db.product.create({ data: { name: 'Plate', priceCents: 900 } });
++    const response = await checkout(
++      [
++        { productId: mug.id, quantity: 2 },
++        { productId: plate.id, quantity: 1 },
++      ],
++      token,
++    );
++    expect(response.status).toBe(201);
++    expect(await response.json()).toMatchObject([
++      { productId: mug.id, quantity: 2, totalCents: 2400 },
++      { productId: plate.id, quantity: 1, totalCents: 900 },
++    ]);
++    expect(await db.order.count({ where: { userId: user.id } })).toBe(2);
++  });
++
++  it('answers 404 for an unknown product', async () => {
++    const { token } = await createUser();
++    expect((await checkout([{ productId: 'missing', quantity: 1 }], token)).status).toBe(404);
++  });
++
++  it('refuses an empty, oversized or malformed cart', async () => {
++    const { token } = await createUser();
++    const tooMany = Array.from({ length: 21 }, () => ({ productId: 'p', quantity: 1 }));
++    for (const items of [[], tooMany, [{ productId: 'p', quantity: 0 }], 'p']) {
++      expect((await checkout(items, token)).status).toBe(400);
++    }
++  });
++});

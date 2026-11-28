@@ -1,0 +1,14 @@
+{
+  "title": "Keep regular visitors signed in",
+  "description": "A session used in its last 7 days is extended to 30 days again, so customers who visit every week are not signed out. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "session-renewal",
+  "comments": [
+    {
+      "id": "renew-window",
+      "file": "src/lib/auth.ts",
+      "line": 8,
+      "issue": "7 * 24 * 60 * 1000 ms is about 2.8 hours, not 7 days (a factor of 60 is missing), so sessions are only extended in their last few hours and weekly visitors are still signed out."
+    }
+  ]
+}

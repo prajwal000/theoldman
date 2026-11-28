@@ -1,0 +1,86 @@
+diff --git a/README.md b/README.md
+index 28ad73e..60d90c6 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/orders/:id`      | One of your orders, with product and customer.  |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/[id]/route.ts b/src/app/api/orders/[id]/route.ts
+new file mode 100644
+index 0000000..5e0c6d0
+--- /dev/null
++++ b/src/app/api/orders/[id]/route.ts
+@@ -0,0 +1,20 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function GET(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const { id } = await params;
++  const order = await db.order.findFirst({
++    where: { id, userId: user.id },
++    include: { product: true, user: true },
++  });
++  if (order === null) return jsonError(404, 'order not found');
++  return Response.json(order);
++}
+diff --git a/test/orders-receipt.test.ts b/test/orders-receipt.test.ts
+new file mode 100644
+index 0000000..648e56a
+--- /dev/null
++++ b/test/orders-receipt.test.ts
+@@ -0,0 +1,43 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/[id]/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string) {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 2, totalCents: 2400 },
++  });
++}
++
++function receipt(id: string, token?: string) {
++  return GET(jsonRequest(`/api/orders/${id}`, { token }), params({ id }));
++}
++
++describe('order receipt', () => {
++  it('shows the order with its product and customer', async () => {
++    const { user, token } = await createUser();
++    const order = await orderFor(user.id);
++    const response = await receipt(order.id, token);
++    expect(response.status).toBe(200);
++    expect(await response.json()).toMatchObject({
++      id: order.id,
++      totalCents: 2400,
++      product: { name: 'Mug', priceCents: 1200 },
++      user: { email: user.email, name: user.name },
++    });
++  });
++
++  it("does not show another customer's order", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const order = await orderFor(other.id);
++    expect((await receipt(order.id, token)).status).toBe(404);
++  });
++
++  it('refuses anonymous requests', async () => {
++    expect((await receipt('any')).status).toBe(401);
++  });
++});

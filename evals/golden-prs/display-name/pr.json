@@ -1,0 +1,14 @@
+{
+  "title": "Let users change their display name",
+  "description": "Adds PATCH /api/users/me with a new `name`, trimmed, from 1 to 100 characters. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "display-name",
+  "comments": [
+    {
+      "id": "it-only",
+      "file": "test/users-me.test.ts",
+      "line": 13,
+      "issue": "`it.only` was left in, so Vitest runs only this test in the file and silently skips the empty-name, long-name and anonymous tests (and in CI, where `allowOnly` is off, the run fails)."
+    }
+  ]
+}

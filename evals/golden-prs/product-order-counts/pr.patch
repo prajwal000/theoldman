@@ -1,0 +1,68 @@
+diff --git a/README.md b/README.md
+index 28ad73e..c25c5d2 100644
+--- a/README.md
++++ b/README.md
+@@ -35,7 +35,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+ | `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
++| `GET /api/products`        | All products, newest first, with `orderCount`.  |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..a4cbfd7 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -4,7 +4,15 @@ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+ export async function GET(): Promise<Response> {
+   const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
+-  return Response.json(products);
++  const withCounts = await Promise.all(
++    products.map(async (product) => ({
++      ...product,
++      orderCount: await db.order.count({
++        where: { productId: product.id, status: { not: 'CANCELLED' } },
++      }),
++    })),
++  );
++  return Response.json(withCounts);
+ }
+ 
+ export async function POST(request: Request): Promise<Response> {
+diff --git a/test/products-order-count.test.ts b/test/products-order-count.test.ts
+new file mode 100644
+index 0000000..707c9b3
+--- /dev/null
++++ b/test/products-order-count.test.ts
+@@ -0,0 +1,28 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/products/route';
++import { db } from '../src/lib/db';
++import { createUser, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('product order counts', () => {
++  it('counts the pending and paid orders of each product', async () => {
++    const { user } = await createUser();
++    const mug = await db.product.create({
++      data: { name: 'Mug', priceCents: 1200, createdAt: new Date(2000) },
++    });
++    await db.product.create({
++      data: { name: 'Plate', priceCents: 900, createdAt: new Date(1000) },
++    });
++    for (const status of ['PENDING', 'PAID', 'CANCELLED'] as const) {
++      await db.order.create({
++        data: { userId: user.id, productId: mug.id, quantity: 1, totalCents: 1200, status },
++      });
++    }
++    const products = (await (await GET()).json()) as { name: string; orderCount: number }[];
++    expect(products.map(({ name, orderCount }) => ({ name, orderCount }))).toEqual([
++      { name: 'Mug', orderCount: 2 },
++      { name: 'Plate', orderCount: 0 },
++    ]);
++  });
++});

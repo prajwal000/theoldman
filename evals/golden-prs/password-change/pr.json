@@ -1,0 +1,14 @@
+{
+  "title": "Let users change their password",
+  "description": "Adds POST /api/users/me/password. The user sends `currentPassword` and `newPassword`; on success every session is signed out and a new token is returned. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "password-change",
+  "comments": [
+    {
+      "id": "current-optional",
+      "file": "src/app/api/users/me/password/route.ts",
+      "line": 23,
+      "issue": "The current password is only checked when `currentPassword` is sent, so a request without it changes the password: anyone holding a stolen session token can take over the account."
+    }
+  ]
+}

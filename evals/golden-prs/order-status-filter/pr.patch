@@ -1,0 +1,101 @@
+diff --git a/README.md b/README.md
+index 28ad73e..8d3a1b9 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                             |
++| -------------------------- | ------------------------------------------------ |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.  |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                    |
++| `GET /api/users/me`        | The signed-in user.                              |
++| `GET /api/products`        | All products, newest first.                      |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.     |
++| `GET /api/products/:id`    | One product.                                     |
++| `DELETE /api/products/:id` | Delete a product (admin).                        |
++| `GET /api/orders`          | Your orders; `?state=PAID` lists only paid ones. |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.        |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..27616c9 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -2,11 +2,22 @@ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
++const STATUSES = ['PENDING', 'PAID', 'CANCELLED'] as const;
++type Status = (typeof STATUSES)[number];
++
++const isStatus = (value: string): value is Status =>
++  (STATUSES as readonly string[]).includes(value);
++
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
++
++  const status = new URL(request.url).searchParams.get('status');
++  if (status !== null && !isStatus(status)) {
++    return jsonError(400, `status must be one of ${STATUSES.join(', ')}`);
++  }
+   const orders = await db.order.findMany({
+-    where: { userId: user.id },
++    where: { userId: user.id, ...(status === null ? {} : { status }) },
+     include: { product: { select: { id: true, name: true } } },
+     orderBy: { createdAt: 'desc' },
+   });
+diff --git a/test/orders-filter.test.ts b/test/orders-filter.test.ts
+new file mode 100644
+index 0000000..931028b
+--- /dev/null
++++ b/test/orders-filter.test.ts
+@@ -0,0 +1,35 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function seed() {
++  const { user, token } = await createUser();
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  for (const status of ['PENDING', 'PAID'] as const) {
++    await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 1, totalCents: 1200, status },
++    });
++  }
++  return token;
++}
++
++async function statuses(url: string, token: string): Promise<string[]> {
++  const orders = (await (await GET(jsonRequest(url, { token }))).json()) as { status: string }[];
++  return orders.map((order) => order.status).sort();
++}
++
++describe('filtering orders by status', () => {
++  it('lists only the orders with the status asked for', async () => {
++    const token = await seed();
++    expect(await statuses('/api/orders?status=PENDING', token)).toEqual(['PENDING']);
++    expect(await statuses('/api/orders', token)).toEqual(['PAID', 'PENDING']);
++  });
++
++  it('refuses an unknown status', async () => {
++    const token = await seed();
++    expect((await GET(jsonRequest('/api/orders?status=LOST', { token }))).status).toBe(400);
++  });
++});

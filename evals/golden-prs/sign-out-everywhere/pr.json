@@ -1,0 +1,14 @@
+{
+  "title": "Add sign-out on every device",
+  "description": "For a lost phone: adds POST /api/auth/logout-all, which ends every session the user has, including the one making the request. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "sign-out-everywhere",
+  "comments": [
+    {
+      "id": "doc-comment",
+      "file": "src/lib/auth.ts",
+      "line": 54,
+      "issue": "The doc comment says the requesting session stays signed in, but the function deletes every session of the user, as the PR intends; the comment is wrong and will mislead the next caller."
+    }
+  ]
+}

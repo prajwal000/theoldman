@@ -1,0 +1,14 @@
+{
+  "title": "Add a limit to the product list",
+  "description": "The storefront's new-arrivals strip only needs a few products. GET /api/products takes an optional `limit` and then returns only the newest `limit` products; without it, it still returns them all. Includes tests and a README update.",
+  "base": "next-prisma",
+  "branch": "product-list-limit",
+  "comments": [
+    {
+      "id": "unchecked-limit",
+      "file": "src/app/api/products/route.ts",
+      "line": 9,
+      "issue": "`limit` is passed to Prisma without checking it is a positive whole number: `?limit=-1` returns the oldest products, and `?limit=abc` gives NaN, which makes Prisma throw, so the route answers 500 instead of 400."
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+diff --git a/README.md b/README.md
+index 28ad73e..880b828 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                       | What                                            |
++| --------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`     | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`      | Sign in: `email`, `password`.                   |
++| `POST /api/auth/logout-all` | Sign out on every device, this one included.    |
++| `GET /api/users/me`         | The signed-in user.                             |
++| `GET /api/products`         | All products, newest first.                     |
++| `POST /api/products`        | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`     | One product.                                    |
++| `DELETE /api/products/:id`  | Delete a product (admin).                       |
++| `GET /api/orders`           | The signed-in user's orders.                    |
++| `POST /api/orders`          | Order a product: `productId`, `quantity`.       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/auth/logout-all/route.ts b/src/app/api/auth/logout-all/route.ts
+new file mode 100644
+index 0000000..65e8c5c
+--- /dev/null
++++ b/src/app/api/auth/logout-all/route.ts
+@@ -0,0 +1,8 @@
++import { endAllSessions, getCurrentUser } from '../../../../lib/auth';
++import { jsonError } from '../../../../lib/http';
++
++export async function POST(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  return Response.json({ ended: await endAllSessions(user.id) });
++}
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..31bb26a 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -50,6 +50,15 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+   return session.user;
+ }
+ 
++/**
++ * Signs the user out on their other devices. The session that made the request stays signed
++ * in, so the user can carry on. Returns how many sessions were ended.
++ */
++export async function endAllSessions(userId: string): Promise<number> {
++  const { count } = await db.session.deleteMany({ where: { userId } });
++  return count;
++}
++
+ export function publicUser(user: User) {
+   return { id: user.id, email: user.email, name: user.name, role: user.role };
+ }
+diff --git a/test/logout-all.test.ts b/test/logout-all.test.ts
+new file mode 100644
+index 0000000..e6e71d3
+--- /dev/null
++++ b/test/logout-all.test.ts
+@@ -0,0 +1,33 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as logoutAll } from '../src/app/api/auth/logout-all/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { createSession } from '../src/lib/auth';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('signing out everywhere', () => {
++  it('ends every session of the user, this one included', async () => {
++    const { user, token } = await createUser();
++    const phone = await createSession(user.id);
++    const response = await logoutAll(
++      jsonRequest('/api/auth/logout-all', { method: 'POST', token }),
++    );
++    expect(await response.json()).toEqual({ ended: 2 });
++    for (const session of [token, phone]) {
++      expect((await me(jsonRequest('/api/users/me', { token: session }))).status).toBe(401);
++    }
++  });
++
++  it("leaves other users' sessions alone", async () => {
++    const { token } = await createUser();
++    const { token: other } = await createUser();
++    await logoutAll(jsonRequest('/api/auth/logout-all', { method: 'POST', token }));
++    expect((await me(jsonRequest('/api/users/me', { token: other }))).status).toBe(200);
++  });
++
++  it('refuses anonymous requests', async () => {
++    const response = await logoutAll(jsonRequest('/api/auth/logout-all', { method: 'POST' }));
++    expect(response.status).toBe(401);
++  });
++});

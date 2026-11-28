@@ -1,0 +1,70 @@
+diff --git a/README.md b/README.md
+index 28ad73e..ba66c22 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/orders/latest`   | Your most recent order.                         |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/latest/route.ts b/src/app/api/orders/latest/route.ts
+new file mode 100644
+index 0000000..27b1381
+--- /dev/null
++++ b/src/app/api/orders/latest/route.ts
+@@ -0,0 +1,16 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const order = await db.order.findFirst({
++    where: { userId: user.id },
++    include: { product: { select: { id: true, name: true } } },
++    orderBy: { createdAt: 'desc' },
++  });
++  if (order === null) return jsonError(404, 'no orders yet');
++  return Response.json(order);
++}
+diff --git a/test/orders-latest.test.ts b/test/orders-latest.test.ts
+new file mode 100644
+index 0000000..bf88911
+--- /dev/null
++++ b/test/orders-latest.test.ts
+@@ -0,0 +1,31 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/latest/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('latest order', () => {
++  it("returns the customer's most recent order", async () => {
++    const { user, token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 1, totalCents: 1200 },
++    });
++    const latest = await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 2, totalCents: 2400 },
++    });
++    const response = await GET(jsonRequest('/api/orders/latest', { token }));
++    expect(response.status).toBe(200);
++    expect(await response.json()).toMatchObject({ id: latest.id, product: { name: 'Mug' } });
++  });
++
++  it('answers 404 before the first order', async () => {
++    const { token } = await createUser();
++    expect((await GET(jsonRequest('/api/orders/latest', { token }))).status).toBe(404);
++  });
++
++  it('refuses anonymous requests', async () => {
++    expect((await GET(jsonRequest('/api/orders/latest'))).status).toBe(401);
++  });
++});

@@ -1,0 +1,87 @@
+diff --git a/README.md b/README.md
+index 28ad73e..dc53ec2 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                             |
++| -------------------------- | ------------------------------------------------ |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.  |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                    |
++| `GET /api/users/me`        | The signed-in user.                              |
++| `GET /api/products`        | All products, newest first; `?limit=` for fewer. |
++| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.     |
++| `GET /api/products/:id`    | One product.                                     |
++| `DELETE /api/products/:id` | Delete a product (admin).                        |
++| `GET /api/orders`          | The signed-in user's orders.                     |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.        |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..06e6c4d 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -2,8 +2,12 @@ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
+-export async function GET(): Promise<Response> {
+-  const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
++export async function GET(request: Request): Promise<Response> {
++  const limit = new URL(request.url).searchParams.get('limit');
++  const products = await db.product.findMany({
++    orderBy: { createdAt: 'desc' },
++    take: limit === null ? undefined : Number(limit),
++  });
+   return Response.json(products);
+ }
+ 
+diff --git a/test/products.test.ts b/test/products.test.ts
+index a2391a2..090e389 100644
+--- a/test/products.test.ts
++++ b/test/products.test.ts
+@@ -6,6 +6,11 @@ import { createUser, jsonRequest, params, resetDatabase } from './helpers';
+ 
+ beforeEach(resetDatabase);
+ 
++async function names(url: string): Promise<string[]> {
++  const products = (await (await GET(jsonRequest(url))).json()) as { name: string }[];
++  return products.map((product) => product.name);
++}
++
+ describe('products', () => {
+   it('lets an admin add a product', async () => {
+     const { token } = await createUser('ADMIN');
+@@ -27,8 +32,17 @@ describe('products', () => {
+   it('lists products newest first', async () => {
+     await db.product.create({ data: { name: 'Old', priceCents: 1, createdAt: new Date(1000) } });
+     await db.product.create({ data: { name: 'New', priceCents: 1, createdAt: new Date(2000) } });
+-    const products = (await (await GET()).json()) as { name: string }[];
+-    expect(products.map((product) => product.name)).toEqual(['New', 'Old']);
++    expect(await names('/api/products')).toEqual(['New', 'Old']);
++  });
++
++  it('lists only the newest products when given a limit', async () => {
++    for (let i = 0; i < 5; i += 1) {
++      await db.product.create({
++        data: { name: `P${String(i)}`, priceCents: 1, createdAt: new Date(1000 + i) },
++      });
++    }
++    expect(await names('/api/products?limit=2')).toEqual(['P4', 'P3']);
++    expect(await names('/api/products')).toHaveLength(5);
+   });
+ 
+   it('deletes a product', async () => {

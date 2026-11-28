@@ -1,0 +1,14 @@
+{
+  "title": "Check out a whole cart in one request",
+  "description": "Adds POST /api/orders/batch for the cart page: it takes `items`, up to 20 `{ productId, quantity }`, and places the cart's orders together. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "cart-checkout",
+  "comments": [
+    {
+      "id": "partial-cart",
+      "file": "src/app/api/orders/batch/route.ts",
+      "line": 46,
+      "issue": "Orders are created one at a time outside a transaction, and a missing product is only noticed when the loop reaches it, so the request answers 404 but the earlier items' orders stay placed (as they do if a later create fails). Check every product before creating anything, and create the orders in one transaction."
+    }
+  ]
+}

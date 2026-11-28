@@ -1,0 +1,14 @@
+{
+  "title": "Add the customer's latest order for the home page",
+  "description": "The home page shows a 'your last order' card. Adds GET /api/orders/latest with the signed-in customer's most recent order and its product. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "latest-order",
+  "comments": [
+    {
+      "id": "same-timestamp",
+      "file": "test/orders-latest.test.ts",
+      "line": 15,
+      "issue": "The test creates two orders back to back and relies on their `createdAt` differing, but it is stored to the millisecond, so both can get the same time and the route may return either order: the test is flaky. Set `createdAt` explicitly, as the products test does (and the route could add `id` as a tie-breaker)."
+    }
+  ]
+}

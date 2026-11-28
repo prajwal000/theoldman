@@ -1,0 +1,74 @@
+diff --git a/README.md b/README.md
+index 28ad73e..8bb5411 100644
+--- a/README.md
++++ b/README.md
+@@ -36,6 +36,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+ | `GET /api/users/me`        | The signed-in user.                             |
+ | `GET /api/products`        | All products, newest first.                     |
++| `GET /api/products/search` | Products whose name contains `?q=`, at most 50. |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+diff --git a/src/app/api/products/search/route.ts b/src/app/api/products/search/route.ts
+new file mode 100644
+index 0000000..0f0ae7a
+--- /dev/null
++++ b/src/app/api/products/search/route.ts
+@@ -0,0 +1,15 @@
++import type { Product } from '../../../../generated/prisma/client';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++const MAX_RESULTS = 50;
++
++export async function GET(request: Request): Promise<Response> {
++  const query = new URL(request.url).searchParams.get('q')?.trim() ?? '';
++  if (query === '') return jsonError(400, 'q is required');
++
++  const products = await db.$queryRawUnsafe<Product[]>(
++    `SELECT * FROM "Product" WHERE "name" ILIKE '%${query}%' ORDER BY "createdAt" DESC LIMIT ${MAX_RESULTS}`,
++  );
++  return Response.json(products);
++}
+diff --git a/test/products-search.test.ts b/test/products-search.test.ts
+new file mode 100644
+index 0000000..fafb1a5
+--- /dev/null
++++ b/test/products-search.test.ts
+@@ -0,0 +1,35 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/products/search/route';
++import { db } from '../src/lib/db';
++import { jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function search(q: string): Promise<{ status: number; names: string[] }> {
++  const response = await GET(jsonRequest(`/api/products/search?q=${encodeURIComponent(q)}`));
++  if (response.status !== 200) return { status: response.status, names: [] };
++  const products = (await response.json()) as { name: string }[];
++  return { status: 200, names: products.map((product) => product.name) };
++}
++
++describe('product search', () => {
++  it('finds products by part of their name, ignoring case', async () => {
++    await db.product.create({ data: { name: 'Blue Mug', priceCents: 1200 } });
++    await db.product.create({ data: { name: 'Red Plate', priceCents: 900 } });
++    expect(await search('mug')).toEqual({ status: 200, names: ['Blue Mug'] });
++  });
++
++  it('lists the newest match first', async () => {
++    await db.product.create({
++      data: { name: 'Old Mug', priceCents: 1, createdAt: new Date(1000) },
++    });
++    await db.product.create({
++      data: { name: 'New Mug', priceCents: 1, createdAt: new Date(2000) },
++    });
++    expect((await search('mug')).names).toEqual(['New Mug', 'Old Mug']);
++  });
++
++  it('asks for a search term', async () => {
++    expect((await search('  ')).status).toBe(400);
++  });
++});

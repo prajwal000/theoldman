@@ -1,0 +1,14 @@
+{
+  "title": "Let admins edit products",
+  "description": "Adds PUT /api/products/:id for admins to change a product's name and price. Existing orders keep the totals they were placed with. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "product-edit",
+  "comments": [
+    {
+      "id": "price-validation",
+      "file": "src/app/api/products/[id]/route.ts",
+      "line": 26,
+      "issue": "priceCents is only checked to be a number, unlike POST /api/products: a negative price is saved, a fraction is answered as saved but stored rounded, and a value too big for the integer column makes Prisma throw, giving a 500 instead of a 400."
+    }
+  ]
+}
