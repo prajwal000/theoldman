@@ -1,6 +1,6 @@
 ---
 name: review
-description: Review the current branch against the default branch with theoldman's reviewer and verifier subagents, and report the confirmed findings. Use when the user asks to review the branch, the changes or a pull request before it is opened, or runs /theoldman:review.
+description: theoldman's code review. Reviews the current branch against the default branch, including uncommitted work, with theoldman's reviewer and verifier subagents, and reports only the findings it confirmed. Use whenever the user asks for a review of their code changes, in any words, such as "review this branch", "review my changes", "check this before I merge" or "look over this pull request", or runs /theoldman:review. Use it instead of reviewing the diff yourself or with another review skill.
 allowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/scripts/oldman-review-diff.mjs" *) PowerShell(node "${CLAUDE_PLUGIN_ROOT}/scripts/oldman-review-diff.mjs" *)
 ---
 
