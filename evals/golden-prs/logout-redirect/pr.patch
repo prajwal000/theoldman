@@ -1,0 +1,97 @@
+diff --git a/README.md b/README.md
+index 28ad73e..a817373 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+ | `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
++| `POST /api/auth/logout`    | Sign out, then go to `?next=` (a path) or home. |
+ | `GET /api/users/me`        | The signed-in user.                             |
+ | `GET /api/products`        | All products, newest first.                     |
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+diff --git a/src/app/api/auth/logout/route.ts b/src/app/api/auth/logout/route.ts
+new file mode 100644
+index 0000000..39dfd3c
+--- /dev/null
++++ b/src/app/api/auth/logout/route.ts
+@@ -0,0 +1,18 @@
++import { endSession } from '../../../../lib/auth';
++
++/** Where to send the browser afterwards: the `next` path on this site, or the home page. */
++function redirectTarget(request: Request): string {
++  const next = new URL(request.url).searchParams.get('next');
++  return next !== null && next.startsWith('/') ? next : '/';
++}
++
++export async function POST(request: Request): Promise<Response> {
++  await endSession(request);
++  return new Response(null, {
++    status: 303,
++    headers: {
++      location: redirectTarget(request),
++      'set-cookie': 'session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax',
++    },
++  });
++}
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..c211e4a 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -50,6 +50,13 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+   return session.user;
+ }
+ 
++/** Deletes the session the request is signed in with, if it has one. */
++export async function endSession(request: Request): Promise<void> {
++  const token = sessionToken(request);
++  if (token === undefined) return;
++  await db.session.deleteMany({ where: { tokenHash: hashToken(token) } });
++}
++
+ export function publicUser(user: User) {
+   return { id: user.id, email: user.email, name: user.name, role: user.role };
+ }
+diff --git a/test/logout.test.ts b/test/logout.test.ts
+new file mode 100644
+index 0000000..c6dfb9d
+--- /dev/null
++++ b/test/logout.test.ts
+@@ -0,0 +1,37 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as logout } from '../src/app/api/auth/logout/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('signing out', () => {
++  it('ends the session and sends the browser to the next page', async () => {
++    const { token } = await createUser();
++    const response = await logout(
++      jsonRequest('/api/auth/logout?next=/orders', { method: 'POST', token }),
++    );
++    expect(response.status).toBe(303);
++    expect(response.headers.get('location')).toBe('/orders');
++    expect((await me(jsonRequest('/api/users/me', { token }))).status).toBe(401);
++  });
++
++  it('sends the browser home without a next page', async () => {
++    const { token } = await createUser();
++    const response = await logout(jsonRequest('/api/auth/logout', { method: 'POST', token }));
++    expect(response.headers.get('location')).toBe('/');
++  });
++
++  it('does not send the browser to another site', async () => {
++    const { token } = await createUser();
++    const response = await logout(
++      jsonRequest('/api/auth/logout?next=https://evil.example/', { method: 'POST', token }),
++    );
++    expect(response.headers.get('location')).toBe('/');
++  });
++
++  it('clears the session cookie', async () => {
++    const response = await logout(jsonRequest('/api/auth/logout', { method: 'POST' }));
++    expect(response.headers.get('set-cookie')).toMatch(/^session=;.*Max-Age=0/);
++  });
++});

@@ -1,0 +1,14 @@
+{
+  "title": "Let customers change the quantity of a pending order",
+  "description": "Adds PATCH /api/orders/:id with a new `quantity` for one of the customer's pending orders. The order keeps the unit price it was placed at, even if the product's price has changed since. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "order-quantity",
+  "comments": [
+    {
+      "id": "unit-price",
+      "file": "src/app/api/orders/[id]/route.ts",
+      "line": 26,
+      "issue": "The new total multiplies the old total, not the unit price, by the new quantity, so any order whose quantity was more than 1 is overcharged (2 at 1200 changed to 3 becomes 7200, not 3600)."
+    }
+  ]
+}

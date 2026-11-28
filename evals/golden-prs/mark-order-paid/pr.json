@@ -1,0 +1,14 @@
+{
+  "title": "Let admins mark orders paid",
+  "description": "Adds POST /api/orders/:id/pay so an admin can mark a pending order paid when the bank transfer arrives. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "mark-order-paid",
+  "comments": [
+    {
+      "id": "test-without-token",
+      "file": "test/orders-pay.test.ts",
+      "line": 33,
+      "issue": "The 'refuses customers' test sends no token, so it gets 401 for being signed out and never reaches the admin check; with `not.toBe(200)` it would still pass if customers could mark orders paid. It should send the customer's token and expect 403."
+    }
+  ]
+}

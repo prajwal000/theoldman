@@ -1,0 +1,14 @@
+{
+  "title": "Show how often each product is ordered",
+  "description": "The storefront wants to show popular products. GET /api/products now includes `orderCount` for each product: its number of pending or paid orders. Includes a test and a README update.",
+  "base": "next-prisma",
+  "branch": "product-order-counts",
+  "comments": [
+    {
+      "id": "n-plus-one",
+      "file": "src/app/api/products/route.ts",
+      "line": 10,
+      "issue": "It runs one count query per product (N+1), all at once through `Promise.all`, on a public route that lists every product; use one grouped query (`groupBy` on productId or a filtered `_count` include) instead."
+    }
+  ]
+}

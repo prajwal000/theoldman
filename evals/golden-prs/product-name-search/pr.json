@@ -1,0 +1,14 @@
+{
+  "title": "Add product search",
+  "description": "Adds GET /api/products/search?q= for the storefront search box. It finds products whose name contains the term, ignoring case, newest first, at most 50. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "product-name-search",
+  "comments": [
+    {
+      "id": "sql-injection",
+      "file": "src/app/api/products/search/route.ts",
+      "line": 12,
+      "issue": "The search term is put straight into the SQL string passed to `$queryRawUnsafe`, so `q` can inject SQL (for example `' OR 1=1 --`, or a UNION reading the User table's password hashes). Use a tagged `$queryRaw` template or `findMany` with `contains`."
+    }
+  ]
+}

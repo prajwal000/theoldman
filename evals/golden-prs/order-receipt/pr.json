@@ -1,0 +1,14 @@
+{
+  "title": "Add an order receipt endpoint",
+  "description": "Adds GET /api/orders/:id with one of the customer's orders, its product and the customer's name and email, for the receipt page. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "order-receipt",
+  "comments": [
+    {
+      "id": "password-hash",
+      "file": "src/app/api/orders/[id]/route.ts",
+      "line": 16,
+      "issue": "`user: true` returns the whole user row, so the response includes the customer's `passwordHash`; it should select only the fields the receipt needs, as `publicUser` does."
+    }
+  ]
+}

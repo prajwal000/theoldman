@@ -1,0 +1,14 @@
+{
+  "title": "Email customers when they place an order",
+  "description": "Customers get a confirmation email for each order, sent from the shop's own address. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "order-confirmation-email",
+  "comments": [
+    {
+      "id": "env-undocumented",
+      "file": "src/lib/email.ts",
+      "line": 21,
+      "issue": "The PR adds a required environment variable, EMAIL_FROM, but the README's Environment table (and setup) is not updated, so a deploy without it fails every order with a 500."
+    }
+  ]
+}

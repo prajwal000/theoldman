@@ -1,0 +1,92 @@
+diff --git a/README.md b/README.md
+index 28ad73e..3d595ac 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/orders/summary`  | Your paid orders: how many, and total spent.    |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/summary/route.ts b/src/app/api/orders/summary/route.ts
+new file mode 100644
+index 0000000..e156629
+--- /dev/null
++++ b/src/app/api/orders/summary/route.ts
+@@ -0,0 +1,15 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const summary = await db.order.aggregate({
++    where: { userId: user.id, status: { not: 'CANCELLED' } },
++    _count: true,
++    _sum: { totalCents: true },
++  });
++  return Response.json({ orders: summary._count, spentCents: summary._sum.totalCents ?? 0 });
++}
+diff --git a/test/orders-summary.test.ts b/test/orders-summary.test.ts
+new file mode 100644
+index 0000000..7bc4056
+--- /dev/null
++++ b/test/orders-summary.test.ts
+@@ -0,0 +1,54 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/summary/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('order summary', () => {
++  it('counts paid orders and what was spent on them', async () => {
++    const { user, token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await db.order.create({
++      data: {
++        userId: user.id,
++        productId: product.id,
++        quantity: 2,
++        totalCents: 2400,
++        status: 'PAID',
++      },
++    });
++    await db.order.create({
++      data: {
++        userId: user.id,
++        productId: product.id,
++        quantity: 1,
++        totalCents: 1200,
++        status: 'CANCELLED',
++      },
++    });
++    const response = await GET(jsonRequest('/api/orders/summary', { token }));
++    expect(await response.json()).toEqual({ orders: 1, spentCents: 2400 });
++  });
++
++  it('leaves out other customers', async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await db.order.create({
++      data: {
++        userId: other.id,
++        productId: product.id,
++        quantity: 1,
++        totalCents: 1200,
++        status: 'PAID',
++      },
++    });
++    const response = await GET(jsonRequest('/api/orders/summary', { token }));
++    expect(await response.json()).toEqual({ orders: 0, spentCents: 0 });
++  });
++
++  it('refuses anonymous requests', async () => {
++    expect((await GET(jsonRequest('/api/orders/summary'))).status).toBe(401);
++  });
++});

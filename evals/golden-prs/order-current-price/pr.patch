@@ -1,0 +1,74 @@
+diff --git a/README.md b/README.md
+index 28ad73e..2a4683b 100644
+--- a/README.md
++++ b/README.md
+@@ -39,7 +39,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+ | `GET /api/products/:id`    | One product.                                    |
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
++| `GET /api/orders`          | Your orders, with each product's current price. |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..f3fdc89 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -7,10 +7,16 @@ export async function GET(request: Request): Promise<Response> {
+   if (user === null) return jsonError(401, 'sign in first');
+   const orders = await db.order.findMany({
+     where: { userId: user.id },
+-    include: { product: { select: { id: true, name: true } } },
++    include: { product: { select: { name: true, priceCents: true } } },
+     orderBy: { createdAt: 'desc' },
+   });
+-  return Response.json(orders);
++  return Response.json(
++    orders.map(({ product, ...order }) => ({
++      ...order,
++      productName: product.name,
++      productPriceCents: product.priceCents,
++    })),
++  );
+ }
+ 
+ export async function POST(request: Request): Promise<Response> {
+diff --git a/test/orders-list.test.ts b/test/orders-list.test.ts
+new file mode 100644
+index 0000000..4007901
+--- /dev/null
++++ b/test/orders-list.test.ts
+@@ -0,0 +1,32 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('order list', () => {
++  it("shows each product's current price next to what was paid", async () => {
++    const { user, token } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    const order = await db.order.create({
++      data: { userId: user.id, productId: product.id, quantity: 2, totalCents: 2400 },
++    });
++    await db.product.update({ where: { id: product.id }, data: { priceCents: 1500 } });
++
++    const response = await GET(jsonRequest('/api/orders', { token }));
++    expect(await response.json()).toMatchObject([
++      { id: order.id, totalCents: 2400, productName: 'Mug', productPriceCents: 1500 },
++    ]);
++  });
++
++  it("lists only the signed-in customer's orders", async () => {
++    const { token } = await createUser();
++    const { user: other } = await createUser();
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await db.order.create({
++      data: { userId: other.id, productId: product.id, quantity: 1, totalCents: 1200 },
++    });
++    expect(await (await GET(jsonRequest('/api/orders', { token }))).json()).toEqual([]);
++  });
++});

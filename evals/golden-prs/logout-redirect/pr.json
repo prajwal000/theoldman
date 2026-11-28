@@ -1,0 +1,14 @@
+{
+  "title": "Add sign-out",
+  "description": "Adds POST /api/auth/logout. It ends the session, clears the session cookie and sends the browser to the page in `next`, a path on this site, or to the home page. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "logout-redirect",
+  "comments": [
+    {
+      "id": "open-redirect",
+      "file": "src/app/api/auth/logout/route.ts",
+      "line": 6,
+      "issue": "Checking only that `next` starts with `/` lets `//evil.example` (and `/\\evil.example`) through, which browsers treat as another site: an open redirect usable for phishing."
+    }
+  ]
+}

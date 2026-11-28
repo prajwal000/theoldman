@@ -1,0 +1,104 @@
+diff --git a/README.md b/README.md
+index 28ad73e..bc8c251 100644
+--- a/README.md
++++ b/README.md
+@@ -30,6 +30,8 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
++Sessions last 30 days. Using a session in its last 7 days extends it to 30 days again.
++
+ | Route                      | What                                            |
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+diff --git a/src/lib/auth.ts b/src/lib/auth.ts
+index bfce967..1ecfafa 100644
+--- a/src/lib/auth.ts
++++ b/src/lib/auth.ts
+@@ -4,6 +4,8 @@ import type { User } from '../generated/prisma/client';
+ import { db } from './db';
+ 
+ const SESSION_DAYS = 30;
++/** A session used in its last week is extended, so people who visit weekly stay signed in. */
++const RENEW_WITHIN_MS = 7 * 24 * 60 * 1000;
+ export const MIN_PASSWORD_LENGTH = 8;
+ 
+ export function hashPassword(password: string): Promise<string> {
+@@ -19,14 +21,14 @@ export function hashToken(token: string): string {
+   return createHash('sha256').update(token).digest('hex');
+ }
+ 
++function sessionExpiry(): Date {
++  return new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
++}
++
+ export async function createSession(userId: string): Promise<string> {
+   const token = randomBytes(32).toString('base64url');
+   await db.session.create({
+-    data: {
+-      userId,
+-      tokenHash: hashToken(token),
+-      expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000),
+-    },
++    data: { userId, tokenHash: hashToken(token), expiresAt: sessionExpiry() },
+   });
+   return token;
+ }
+@@ -47,6 +49,9 @@ export async function getCurrentUser(request: Request): Promise<User | null> {
+     include: { user: true },
+   });
+   if (session === null || session.expiresAt <= new Date()) return null;
++  if (session.expiresAt.getTime() - Date.now() < RENEW_WITHIN_MS) {
++    await db.session.update({ where: { id: session.id }, data: { expiresAt: sessionExpiry() } });
++  }
+   return session.user;
+ }
+ 
+diff --git a/test/session-renewal.test.ts b/test/session-renewal.test.ts
+new file mode 100644
+index 0000000..2fcf8e0
+--- /dev/null
++++ b/test/session-renewal.test.ts
+@@ -0,0 +1,42 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { getCurrentUser, hashToken } from '../src/lib/auth';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++async function sessionExpiringIn(ms: number): Promise<{ token: string; id: string }> {
++  const { token } = await createUser();
++  const session = await db.session.update({
++    where: { tokenHash: hashToken(token) },
++    data: { expiresAt: new Date(Date.now() + ms) },
++  });
++  return { token, id: session.id };
++}
++
++async function expiresAt(id: string): Promise<number> {
++  const session = await db.session.findUniqueOrThrow({ where: { id } });
++  return session.expiresAt.getTime();
++}
++
++describe('session renewal', () => {
++  it('extends a session used in its last week to 30 days', async () => {
++    const { token, id } = await sessionExpiringIn(60 * 60 * 1000);
++    expect(await getCurrentUser(jsonRequest('/api/users/me', { token }))).not.toBeNull();
++    expect(await expiresAt(id)).toBeGreaterThan(Date.now() + 29 * DAY_MS);
++  });
++
++  it('leaves a session with weeks left alone', async () => {
++    const { token, id } = await sessionExpiringIn(20 * DAY_MS);
++    const before = await expiresAt(id);
++    await getCurrentUser(jsonRequest('/api/users/me', { token }));
++    expect(await expiresAt(id)).toBe(before);
++  });
++
++  it('does not bring back an expired session', async () => {
++    const { token } = await sessionExpiringIn(-1000);
++    expect(await getCurrentUser(jsonRequest('/api/users/me', { token }))).toBeNull();
++  });
++});

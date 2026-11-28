@@ -1,0 +1,14 @@
+{
+  "title": "Show today's price in the order list",
+  "description": "The order history page wants to show what each product costs today next to what the customer paid. GET /api/orders now also returns the product's current price. Includes tests and a README update.",
+  "base": "next-prisma",
+  "branch": "order-current-price",
+  "comments": [
+    {
+      "id": "breaking-shape",
+      "file": "src/app/api/orders/route.ts",
+      "line": 14,
+      "issue": "Each order's `product` object (`{ id, name }`) is replaced by flat `productName` and `productPriceCents` fields, and the product id is dropped, so existing clients that read `order.product` break. The price could be added inside `product` instead."
+    }
+  ]
+}

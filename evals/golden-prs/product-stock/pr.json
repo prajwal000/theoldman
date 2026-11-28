@@ -1,0 +1,14 @@
+{
+  "title": "Track product stock",
+  "description": "Products get a stock count. Admins set `stock` when adding a product, and the product routes return it. Includes the migration, tests and a README update.",
+  "base": "next-prisma",
+  "branch": "product-stock",
+  "comments": [
+    {
+      "id": "not-null-backfill",
+      "file": "prisma/migrations/20261202093000_product_stock/migration.sql",
+      "line": 2,
+      "issue": "The migration adds a NOT NULL column with no default and no backfill, so it fails on any database that already has products, including production; add a default or backfill existing rows first."
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "title": "Add an order summary for the account page",
+  "description": "Adds GET /api/orders/summary with the number of paid orders the signed-in customer has and the total spent on them. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "orders-summary",
+  "comments": [
+    {
+      "id": "pending-counted",
+      "file": "src/app/api/orders/summary/route.ts",
+      "line": 10,
+      "issue": "The filter only leaves out cancelled orders, so pending orders that were never paid are counted as paid and added to the total spent."
+    }
+  ]
+}

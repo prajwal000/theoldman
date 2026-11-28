@@ -1,0 +1,134 @@
+diff --git a/README.md b/README.md
+index 28ad73e..af24f2d 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                         | What                                               |
++| ----------------------------- | -------------------------------------------------- |
++| `POST /api/auth/signup`       | Create an account: `email`, `name`, `password`.    |
++| `POST /api/auth/login`        | Sign in: `email`, `password`.                      |
++| `GET /api/users/me`           | The signed-in user.                                |
++| `POST /api/users/me/password` | Change password: `currentPassword`, `newPassword`. |
++| `GET /api/products`           | All products, newest first.                        |
++| `POST /api/products`          | Add a product (admin): `name`, `priceCents`.       |
++| `GET /api/products/:id`       | One product.                                       |
++| `DELETE /api/products/:id`    | Delete a product (admin).                          |
++| `GET /api/orders`             | The signed-in user's orders.                       |
++| `POST /api/orders`            | Order a product: `productId`, `quantity`.          |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/users/me/password/route.ts b/src/app/api/users/me/password/route.ts
+new file mode 100644
+index 0000000..9444dcd
+--- /dev/null
++++ b/src/app/api/users/me/password/route.ts
+@@ -0,0 +1,35 @@
++import {
++  createSession,
++  getCurrentUser,
++  hashPassword,
++  MIN_PASSWORD_LENGTH,
++  verifyPassword,
++} from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../../lib/http';
++
++export async function POST(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++
++  const body = await readJson(request);
++  if (!isRecord(body) || typeof body.newPassword !== 'string') {
++    return jsonError(400, 'newPassword is required');
++  }
++  if (body.newPassword.length < MIN_PASSWORD_LENGTH) {
++    return jsonError(400, `password must be at least ${MIN_PASSWORD_LENGTH} characters`);
++  }
++  if (
++    typeof body.currentPassword === 'string' &&
++    !(await verifyPassword(body.currentPassword, user.passwordHash))
++  ) {
++    return jsonError(403, 'current password is wrong');
++  }
++
++  const passwordHash = await hashPassword(body.newPassword);
++  await db.$transaction([
++    db.user.update({ where: { id: user.id }, data: { passwordHash } }),
++    db.session.deleteMany({ where: { userId: user.id } }),
++  ]);
++  return Response.json({ token: await createSession(user.id) });
++}
+diff --git a/test/password-change.test.ts b/test/password-change.test.ts
+new file mode 100644
+index 0000000..f48598b
+--- /dev/null
++++ b/test/password-change.test.ts
+@@ -0,0 +1,54 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as login } from '../src/app/api/auth/login/route';
++import { POST as changePassword } from '../src/app/api/users/me/password/route';
++import { GET as me } from '../src/app/api/users/me/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const CURRENT = 'correct horse battery';
++
++function change(body: unknown, token: string) {
++  return changePassword(jsonRequest('/api/users/me/password', { body, token }));
++}
++
++describe('changing the password', () => {
++  it('changes the password and signs out every other session', async () => {
++    const { user, token } = await createUser();
++    const response = await change(
++      { currentPassword: CURRENT, newPassword: 'a new passphrase' },
++      token,
++    );
++    expect(response.status).toBe(200);
++    const { token: fresh } = (await response.json()) as { token: string };
++
++    expect((await me(jsonRequest('/api/users/me', { token }))).status).toBe(401);
++    expect((await me(jsonRequest('/api/users/me', { token: fresh }))).status).toBe(200);
++    const signIn = await login(
++      jsonRequest('/api/auth/login', { body: { email: user.email, password: 'a new passphrase' } }),
++    );
++    expect(signIn.status).toBe(200);
++  });
++
++  it('refuses a wrong current password', async () => {
++    const { token } = await createUser();
++    const response = await change(
++      { currentPassword: 'not it', newPassword: 'a new passphrase' },
++      token,
++    );
++    expect(response.status).toBe(403);
++  });
++
++  it('refuses a short new password', async () => {
++    const { token } = await createUser();
++    const response = await change({ currentPassword: CURRENT, newPassword: 'short' }, token);
++    expect(response.status).toBe(400);
++  });
++
++  it('refuses anonymous requests', async () => {
++    const response = await changePassword(
++      jsonRequest('/api/users/me/password', { body: { newPassword: 'a new passphrase' } }),
++    );
++    expect(response.status).toBe(401);
++  });
++});

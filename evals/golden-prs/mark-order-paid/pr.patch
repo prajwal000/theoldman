@@ -1,0 +1,99 @@
+diff --git a/README.md b/README.md
+index 28ad73e..18d35aa 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `POST /api/orders/:id/pay` | Mark a pending order paid (admin).              |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/[id]/pay/route.ts b/src/app/api/orders/[id]/pay/route.ts
+new file mode 100644
+index 0000000..c6c5a04
+--- /dev/null
++++ b/src/app/api/orders/[id]/pay/route.ts
+@@ -0,0 +1,26 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function POST(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can mark orders paid');
++
++  const { id } = await params;
++  const { count } = await db.order.updateMany({
++    where: { id, status: 'PENDING' },
++    data: { status: 'PAID' },
++  });
++  if (count === 0) {
++    const exists = (await db.order.count({ where: { id } })) > 0;
++    return exists
++      ? jsonError(409, 'only pending orders can be marked paid')
++      : jsonError(404, 'order not found');
++  }
++  return Response.json({ id, status: 'PAID' });
++}
+diff --git a/test/orders-pay.test.ts b/test/orders-pay.test.ts
+new file mode 100644
+index 0000000..ed1a42d
+--- /dev/null
++++ b/test/orders-pay.test.ts
+@@ -0,0 +1,50 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST as pay } from '../src/app/api/orders/[id]/pay/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++async function orderFor(userId: string, status: 'PENDING' | 'PAID' = 'PENDING') {
++  const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++  return db.order.create({
++    data: { userId, productId: product.id, quantity: 1, totalCents: 1200, status },
++  });
++}
++
++function markPaid(id: string, token?: string) {
++  return pay(jsonRequest(`/api/orders/${id}/pay`, { method: 'POST', token }), params({ id }));
++}
++
++describe('marking an order paid', () => {
++  it('lets an admin mark a pending order paid', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: customer } = await createUser();
++    const order = await orderFor(customer.id);
++    const response = await markPaid(order.id, token);
++    expect(response.status).toBe(200);
++    const stored = await db.order.findUniqueOrThrow({ where: { id: order.id } });
++    expect(stored.status).toBe('PAID');
++  });
++
++  it('refuses customers', async () => {
++    const { user } = await createUser();
++    const order = await orderFor(user.id);
++    const response = await markPaid(order.id);
++    expect(response.status).not.toBe(200);
++    const stored = await db.order.findUniqueOrThrow({ where: { id: order.id } });
++    expect(stored.status).toBe('PENDING');
++  });
++
++  it('refuses an order that is not pending', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: customer } = await createUser();
++    const order = await orderFor(customer.id, 'PAID');
++    expect((await markPaid(order.id, token)).status).toBe(409);
++  });
++
++  it('answers 404 for an unknown order', async () => {
++    const { token } = await createUser('ADMIN');
++    expect((await markPaid('missing', token)).status).toBe(404);
++  });
++});

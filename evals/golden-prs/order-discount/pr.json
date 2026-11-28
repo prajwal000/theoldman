@@ -1,0 +1,14 @@
+{
+  "title": "Give 10% off orders of 10 or more",
+  "description": "Orders of 10 or more of one product get 10% off, rounded to the cent. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "order-discount",
+  "comments": [
+    {
+      "id": "boundary",
+      "file": "src/app/api/orders/route.ts",
+      "line": 10,
+      "issue": "The check is `quantity > 10`, so an order of exactly 10 gets no discount, although orders of 10 or more should."
+    }
+  ]
+}
