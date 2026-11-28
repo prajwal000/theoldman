@@ -126,16 +126,18 @@ function complete(
   };
 }
 
-let validator: ValidateFunction | undefined;
+const validators = new Map<string, ValidateFunction>();
 
 /** Throws a ConfigError naming every place the results do not match the schema. */
-export function validateResults(value: unknown): void {
+export function validateResults(value: unknown, schemaFile = SCHEMA_FILE): void {
+  let validator = validators.get(schemaFile);
   if (validator === undefined) {
-    const schema: unknown = JSON.parse(readFileSync(SCHEMA_FILE, 'utf8'));
+    const schema: unknown = JSON.parse(readFileSync(schemaFile, 'utf8'));
     if (typeof schema !== 'object' || schema === null) {
-      throw new ConfigError(`${SCHEMA_FILE} does not hold a JSON object.`);
+      throw new ConfigError(`${schemaFile} does not hold a JSON object.`);
     }
     validator = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
+    validators.set(schemaFile, validator);
   }
   if (validator(value)) return;
   const problems = (validator.errors ?? []).map(
@@ -151,10 +153,20 @@ export function validateResults(value: unknown): void {
  * subscription run cannot be committed as published results by mistake.
  */
 export function writeResults(dir: string, results: Results): string {
-  validateResults(results);
+  return writeResultsFile(dir, results, SCHEMA_FILE, '');
+}
+
+/** writeResults for any results file: `kind` goes after the label, as in `-review`. */
+export function writeResultsFile(
+  dir: string,
+  results: { readonly date: string; readonly label: string; readonly published: boolean },
+  schemaFile: string,
+  kind: string,
+): string {
+  validateResults(results, schemaFile);
   mkdirSync(dir, { recursive: true });
   const suffix = results.published ? '' : '-unpublished';
-  const file = join(dir, `${results.date}-${results.label}${suffix}.json`);
+  const file = join(dir, `${results.date}-${results.label}${kind}${suffix}.json`);
   writeFileSync(file, `${JSON.stringify(results, null, 2)}\n`);
   return file;
 }

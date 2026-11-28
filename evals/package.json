@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "eval": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/run.ts",
+    "review": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/review-run.ts",
     "score": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./src/ts-imports.ts src/score.ts",
     "refresh-patches": "node --experimental-strip-types --disable-warning=ExperimentalWarning src/refresh-patches.ts",
     "verify-tasks": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./src/ts-imports.ts src/verify-tasks.ts",

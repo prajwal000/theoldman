@@ -38,7 +38,8 @@ interface Group {
   readonly folders: Set<string>;
 }
 
-function sameRun(plans: readonly FolderPlan[]) {
+/** The shared provider and exact models of the folders, or a ConfigError if they differ. */
+export function sameRun(plans: readonly FolderPlan[]) {
   const [first] = plans;
   if (first === undefined) throw new ConfigError('Name at least one run folder to score.');
   const key = (plan: FolderPlan): string =>

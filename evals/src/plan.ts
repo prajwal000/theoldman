@@ -57,16 +57,22 @@ export interface PlannedRun {
 
 export const PLAN_FILE = 'plan.json';
 
-export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Date()): PlannedRun {
-  const task = loadTask(dirs.tasksDir, args.task);
+/** The provider and models for a run, refusing a run marked for publication that cannot be. */
+export function planProvider(publish: boolean, env: Env): { provider: Provider; models: Models } {
   const provider = detectProvider(env);
   const models = readModels(env);
-  if (args.publish && provider.auth === 'subscription-token') {
+  if (publish && provider.auth === 'subscription-token') {
     throw new ConfigError(
       'A run marked for publication needs ANTHROPIC_API_KEY: published results come from the Anthropic API (ADR 0007), and CLAUDE_CODE_OAUTH_TOKEN runs on a Claude subscription.',
     );
   }
-  if (args.publish) requireExactModels(provider.name, models);
+  if (publish) requireExactModels(provider.name, models);
+  return { provider, models };
+}
+
+export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Date()): PlannedRun {
+  const task = loadTask(dirs.tasksDir, args.task);
+  const { provider, models } = planProvider(args.publish, env);
 
   const images: Record<string, string[]> = { node: imageRefs(IMAGES.node) };
   for (const service of task.services) images[service] = imageRefs(IMAGES[service]);
@@ -98,7 +104,7 @@ export function planRun(args: RunArgs, env: Env, dirs: Dirs, now: Date = new Dat
 }
 
 /** Creates runs/<stamp>/, or runs/<stamp>-2/ and so on when runs start in the same millisecond. */
-function newRunDir(runsDir: string, stamp: string): string {
+export function newRunDir(runsDir: string, stamp: string): string {
   mkdirSync(runsDir, { recursive: true });
   for (let n = 1; ; n++) {
     const dir = join(runsDir, n === 1 ? stamp : `${stamp}-${String(n)}`);
