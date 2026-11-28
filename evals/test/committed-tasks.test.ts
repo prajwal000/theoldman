@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { loadTask } from '../src/task.ts';
 
 const TASKS = fileURLToPath(new URL('../tasks/', import.meta.url));
+const SUPPORT = join(TASKS, '..', 'hidden-support', 'next-prisma');
 const ids = readdirSync(TASKS, { withFileTypes: true })
   .filter((entry) => entry.isDirectory() && entry.name !== '_template')
   .map((entry) => entry.name);
@@ -30,13 +31,19 @@ describe.each(ids)('task %s', (id) => {
     expect(hidden.some((path) => /\.hidden\.test\.tsx?$/.test(path))).toBe(true);
   });
 
-  it('keeps hidden test names apart from the starter, so copying them in replaces nothing', () => {
-    const hidden = readdirSync(task.hiddenTestsDir, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile())
-      .map((entry) => join(entry.parentPath, entry.name).slice(task.hiddenTestsDir.length + 1));
-    for (const path of hidden) {
-      for (const dir of task.starterDirs) expect(existsSync(join(dir, path))).toBe(false);
+  it('keeps hidden file names apart from the starter, so copying them in replaces nothing', () => {
+    for (const root of task.hiddenDirs) {
+      const hidden = readdirSync(root, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1));
+      for (const path of hidden) {
+        for (const dir of task.starterDirs) expect(existsSync(join(dir, path))).toBe(false);
+      }
     }
+  });
+
+  it('gets the shared hidden helpers from its base, then its own tests', () => {
+    expect(task.hiddenDirs).toEqual([SUPPORT, task.hiddenTestsDir]);
   });
 
   // The reference solution shows the hidden tests can pass; scoring it is a manual check, but it

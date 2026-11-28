@@ -1,12 +1,14 @@
 // Runs inside a scoring container, never on the host: rebuilds the project a run ended with
 // (the task's starter plus the run's diff), installs its dependencies with install scripts off,
 // and prints one JSON object: the final text of every changed file and of every .env.example,
-// tsc and ESLint error counts, Semgrep and gitleaks findings (rule, file and line only, never the
+// tsc and ESLint error counts, whether `next build` passes (for Next.js projects), Semgrep and
+// gitleaks findings (rule, file and line only, never the
 // matched text), and per-file vitest counts with the hidden tests copied in, once on the
 // untouched starter and once on the finished project. The container gets no credentials; for a
 // task with Postgres it gets DATABASE_URL, and each project's Prisma migrations are deployed
 // before its tests run. Mounted read-only: /starters/<n> (the starter folders, copied in order),
-// /hidden (the task's hidden tests), /run (the run folder with diff.patch) and this script.
+// /hidden/<n> (shared hidden helpers, then the task's hidden tests, copied in order), /run (the
+// run folder with diff.patch) and this script.
 
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -53,9 +55,21 @@ function report(result) {
 
 const bin = (name, dir = WORK) => join(dir, 'node_modules', '.bin', name);
 
+// The shared npm cache is mounted read-only, and npm writes to its cache, so it is copied in.
+if (existsSync('/npm-cache')) {
+  cpSync('/npm-cache', join(process.env.HOME ?? '/home/node', '.npm'), { recursive: true });
+}
+
 function install(dir = WORK) {
   if (!existsSync(join(dir, 'package.json'))) return false;
-  const args = ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--loglevel=error'];
+  const args = [
+    'install',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--loglevel=error',
+    '--prefer-offline',
+  ];
   const result = run('npm', args, dir);
   if (result.status === 0) return true;
   const errors = result.stderr
@@ -92,13 +106,24 @@ function vitest(dir, label, output, env) {
   }
 }
 
-const hidden = readdirSync(HIDDEN, { recursive: true, withFileTypes: true })
-  .filter((entry) => entry.isFile())
-  .map((entry) => relative(HIDDEN, join(entry.parentPath, entry.name)));
-const addHidden = (dir) => cpSync(HIDDEN, dir, { recursive: true });
-const starterDirs = readdirSync(STARTERS)
-  .sort((a, b) => Number(a) - Number(b))
-  .map((name) => join(STARTERS, name));
+const numbered = (root) =>
+  readdirSync(root)
+    .sort((a, b) => Number(a) - Number(b))
+    .map((name) => join(root, name));
+const hiddenDirs = numbered(HIDDEN);
+const hidden = [
+  ...new Set(
+    hiddenDirs.flatMap((root) =>
+      readdirSync(root, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => relative(root, join(entry.parentPath, entry.name))),
+    ),
+  ),
+];
+const addHidden = (dir) => {
+  for (const root of hiddenDirs) cpSync(root, dir, { recursive: true });
+};
+const starterDirs = numbered(STARTERS);
 const copyStarter = (dir) => {
   for (const starter of starterDirs) cpSync(starter, dir, { recursive: true });
 };
@@ -183,6 +208,13 @@ const envExamples = textsOf(
   git('ls-files', '-z', '--', ':(glob)**/.env.example').stdout.split('\0'),
 );
 
+// The starter's dependencies were installed in BASE, which only our code has run in. Starting from
+// them, npm only has to apply the run's changes to package.json. This comes after the run's
+// commit, so node_modules never counts as part of the run.
+const baseModules = join(BASE, 'node_modules');
+if (existsSync(baseModules) && !existsSync(join(WORK, 'node_modules'))) {
+  cpSync(baseModules, join(WORK, 'node_modules'), { recursive: true, verbatimSymlinks: true });
+}
 const installed = install();
 
 // Prisma's client types exist only after `prisma generate`, so tsc needs it first.
@@ -276,18 +308,33 @@ function gitleaks() {
 
 const security = { semgrep: semgrep(Object.keys(files)), gitleaks: gitleaks() };
 
-addHidden(WORK);
-let finalTests = null;
-if (installed) {
-  deployMigrations(WORK, 'finished project', process.env);
-  finalTests = vitest(WORK, 'finished project', '/tmp/vitest-final.json', process.env);
+// Migrations first, in case a page reads the database while it is prerendered.
+if (installed) deployMigrations(WORK, 'finished project', process.env);
+
+// `next build` catches what tsc alone does not, such as a route handler with the wrong signature.
+// It runs before the hidden tests are copied in, because it type-checks every file tsconfig
+// includes and the hidden tests are not written to pass a run's type checks.
+let build = null;
+if (installed && existsSync(bin('next'))) {
+  const result = run(bin('next'), ['build'], WORK, {
+    ...process.env,
+    NEXT_TELEMETRY_DISABLED: '1',
+  });
+  build = { ok: result.status === 0 };
+  if (!build.ok) notes.push(`next build failed: ${lastLines(result)}`);
 }
+
+addHidden(WORK);
+const finalTests = installed
+  ? vitest(WORK, 'finished project', '/tmp/vitest-final.json', process.env)
+  : null;
 
 report({
   files,
   envExamples,
   tsc,
   eslint,
+  build,
   ...security,
   tests: { hidden, starter: starterTests, final: finalTests },
 });

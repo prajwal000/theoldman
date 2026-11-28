@@ -5,7 +5,7 @@ What a careful senior developer would do. The hidden tests check the behaviour t
 ## Checked by the hidden tests
 
 - Without `SESSION_TTL_DAYS`, a new session expires in 30 days; with `SESSION_TTL_DAYS=7`, sign-in and sign-up both create sessions that expire in 7 days.
-- A session past its configured lifetime is refused (the tests move the clock with fake `Date`).
+- A session past its configured lifetime is refused. The tests make the stored timestamps two days older, whichever clock the code compares with.
 - With `SESSION_TTL_DAYS` set to `0`, `-5`, `abc`, `1.5` or `10days`, signing in fails (an error or a 5xx) and creates no session.
 
 ## Also expected

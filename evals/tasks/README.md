@@ -27,6 +27,13 @@ The build-mode eval tasks. Each one asks for a change to the shared starter app 
 
 `_template` is not a task: it is the example to copy, with a starter of its own.
 
+Check every task (each starter fails its hidden tests, each reference passes them with no findings), and move the reference patches after changing a starter:
+
+```text
+pnpm --filter evals run verify-tasks
+pnpm --filter evals run refresh-patches
+```
+
 Run a task with the runner and score the runs:
 
 ```text

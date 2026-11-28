@@ -8,7 +8,7 @@ What a careful senior developer would do. The hidden tests check the behaviour t
 - A request for an unknown email gets the same status and body, and sends nothing.
 - Confirming with the token sets the new password: signing in works with it and fails with the old one.
 - A token works once; a second use gets a 400.
-- A token older than one hour gets a 400 (the tests move the clock with fake `Date`, so expiry must be checked in code against the current time).
+- A token older than one hour gets a 400. The tests make every stored timestamp 61 minutes older, so expiry may be checked with the app's clock or the database's.
 - A made-up token and a password shorter than 8 characters get a 400.
 - Sessions that existed before the reset stop working.
 

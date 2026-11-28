@@ -1,15 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { POST as login } from '../../src/app/api/auth/login/route';
 import { GET as me } from '../../src/app/api/users/me/route';
 import { outbox } from '../../src/lib/email';
-import { call, createUser, resetDatabase } from './support';
+import { ageDatabase, call, createUser, resetDatabase } from './support';
 
 beforeEach(async () => {
   await resetDatabase();
   outbox.length = 0;
-});
-afterEach(() => {
-  vi.useRealTimers();
 });
 
 // Imported when a test runs, so on the starter, where they do not exist, each test fails on its
@@ -74,8 +71,7 @@ describe('confirming a reset', () => {
   it('rejects a token after an hour', async () => {
     const { user } = await createUser();
     const token = await resetToken(user.email);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 61 * 60 * 1000);
+    await ageDatabase(61 * 60 * 1000);
     expect((await setPassword(token, 'too late password')).status).toBe(400);
   });
 

@@ -19,7 +19,7 @@ import { plan, writeRunFolder } from './run-folders.ts';
 
 const INPUT = {
   starterDirs: ['C:\\evals\\starters\\base', 'C:\\evals\\tasks\\_template\\starter'],
-  hiddenTestsDir: 'C:\\evals\\tasks\\_template\\hidden',
+  hiddenDirs: ['C:\\evals\\hidden-support\\base', 'C:\\evals\\tasks\\_template\\hidden'],
   runDir: 'C:\\evals\\runs\\2026-11-27T10-00-00-000Z\\with-1',
   reportScript: 'C:\\evals\\docker\\score-report.mjs',
   name: 'theoldman-score-x-with-1',
@@ -33,6 +33,8 @@ describe('workspaceArgs', () => {
       '--rm',
       '--name',
       'theoldman-score-x-with-1',
+      '--label',
+      `theoldman.owner=${String(process.pid)}`,
       '-e',
       'CHECKPOINT_DISABLE=1',
       '--mount',
@@ -40,7 +42,11 @@ describe('workspaceArgs', () => {
       '--mount',
       `type=bind,source=${INPUT.starterDirs[1] ?? ''},target=/starters/1,readonly`,
       '--mount',
-      `type=bind,source=${INPUT.hiddenTestsDir},target=/hidden,readonly`,
+      `type=bind,source=${INPUT.hiddenDirs[0] ?? ''},target=/hidden/0,readonly`,
+      '--mount',
+      `type=bind,source=${INPUT.hiddenDirs[1] ?? ''},target=/hidden/1,readonly`,
+      '--mount',
+      'type=volume,source=theoldman-evals-npm-cache,target=/npm-cache,readonly',
       '--mount',
       `type=bind,source=${INPUT.runDir},target=/run,readonly`,
       '--mount',
@@ -58,7 +64,7 @@ describe('workspaceArgs', () => {
 
   it("joins a task's database network and passes its URL", () => {
     const args = workspaceArgs({ ...INPUT, network: 'theoldman-score-x_default' });
-    expect(args.slice(4, 8)).toEqual([
+    expect(args.slice(6, 10)).toEqual([
       '--network',
       'theoldman-score-x_default',
       '-e',
@@ -83,6 +89,7 @@ describe('parseReport', () => {
     envExamples: { '.env.example': 'PORT=3000\n' },
     tsc: { errors: 2 },
     eslint: null,
+    build: { ok: false },
     semgrep: { findings: [{ rule: 'eval-detected', path: 'src/math.ts', line: 3, endLine: 4 }] },
     gitleaks: { findings: [{ rule: 'aws-access-token', path: 'src/keys.ts', line: 1 }] },
     tests,
@@ -102,12 +109,20 @@ describe('parseReport', () => {
     expect([parsed.semgrep, parsed.gitleaks]).toEqual([null, null]);
   });
 
+  it('reads a report without a build result as having no build', () => {
+    // JSON.stringify leaves out a key whose value is undefined, as an older report has no build.
+    const older = JSON.stringify({ ...report, build: undefined });
+    expect(older).not.toContain('"build"');
+    expect(parseReport(older).build).toBeNull();
+  });
+
   it('passes on a diff that does not apply', () => {
     expect(parseReport(JSON.stringify({ notes: [], error: 'does not apply' }))).toEqual({
       files: {},
       envExamples: {},
       tsc: null,
       eslint: null,
+      build: null,
       semgrep: null,
       gitleaks: null,
       tests: { hidden: [], starter: null, final: null },
@@ -123,6 +138,7 @@ describe('parseReport', () => {
     [JSON.stringify({ ...report, envExamples: undefined }), 'has no envExamples'],
     [JSON.stringify({ ...report, tsc: { errors: -1 } }), 'malformed tsc count'],
     [JSON.stringify({ ...report, eslint: { errors: 1 } }), 'malformed ESLint counts'],
+    [JSON.stringify({ ...report, build: { ok: 'yes' } }), 'malformed build result'],
     [JSON.stringify({ ...report, semgrep: [] }), 'malformed Semgrep findings'],
     [
       JSON.stringify({ ...report, gitleaks: { findings: [{ rule: 'x', path: 'a', line: 0 }] } }),

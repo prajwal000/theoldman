@@ -7,6 +7,8 @@ import { type DockerExec, InterruptedError } from '../docker.ts';
 import { ConfigError } from '../errors.ts';
 import { DATABASE_URL } from '../execute.ts';
 import { SCORE_IMAGE } from '../images.ts';
+import { OWNER_LABEL } from '../orphans.ts';
+import { npmCacheMount } from './npm-cache.ts';
 
 /** A Semgrep or gitleaks finding: the rule and where, never the matched text. */
 export interface ToolFinding {
@@ -37,6 +39,8 @@ export interface WorkspaceReport {
   readonly tsc: { readonly errors: number } | null;
   /** Null when the project has no ESLint config or no ESLint installed. */
   readonly eslint: { readonly errors: number; readonly warnings: number } | null;
+  /** Whether `next build` passed; null for a project without Next.js installed. */
+  readonly build: { readonly ok: boolean } | null;
   /** Findings in the changed files; null when Semgrep failed. */
   readonly semgrep: readonly ToolFinding[] | null;
   /** Findings in the run's changes; null when gitleaks failed. */
@@ -57,7 +61,8 @@ export interface WorkspaceReport {
 export interface WorkspaceInput {
   /** The task's starter folders, copied in this order. */
   readonly starterDirs: readonly string[];
-  readonly hiddenTestsDir: string;
+  /** Hidden test folders, copied in this order: shared helpers, then the task's tests. */
+  readonly hiddenDirs: readonly string[];
   /** For a task with Postgres: the Docker network where it answers as `postgres`. */
   readonly network?: string;
   readonly runDir: string;
@@ -88,12 +93,15 @@ export function workspaceArgs(input: WorkspaceInput): string[] {
     '--rm',
     '--name',
     input.name,
+    '--label',
+    `${OWNER_LABEL}=${String(process.pid)}`,
     ...database,
     // Prisma's CLI reports usage to Prisma unless told not to.
     '-e',
     'CHECKPOINT_DISABLE=1',
     ...input.starterDirs.flatMap((dir, index) => mount(dir, `/starters/${String(index)}`)),
-    ...mount(input.hiddenTestsDir, '/hidden'),
+    ...input.hiddenDirs.flatMap((dir, index) => mount(dir, `/hidden/${String(index)}`)),
+    ...npmCacheMount(),
     ...mount(input.runDir, '/run'),
     ...mount(input.reportScript, '/score/report.mjs'),
     '--entrypoint',
@@ -146,6 +154,7 @@ export function parseReport(stdout: string): WorkspaceReport {
       envExamples: {},
       tsc: null,
       eslint: null,
+      build: null,
       semgrep: null,
       gitleaks: null,
       tests: { hidden: [], starter: null, final: null },
@@ -159,6 +168,7 @@ export function parseReport(stdout: string): WorkspaceReport {
     envExamples: readTexts(value.envExamples, 'envExamples'),
     tsc: readTsc(value.tsc),
     eslint: readEslint(value.eslint),
+    build: readBuild(value.build),
     semgrep: readFindings(value.semgrep, 'Semgrep'),
     gitleaks: readFindings(value.gitleaks, 'gitleaks'),
     tests: readTests(value.tests),
@@ -189,6 +199,13 @@ function readEslint(value: unknown): WorkspaceReport['eslint'] {
     return { errors: value.errors, warnings: value.warnings };
   }
   throw new Error('the scoring report has malformed ESLint counts');
+}
+
+function readBuild(value: unknown): WorkspaceReport['build'] {
+  // Reports from before the build step have no field at all.
+  if (value === null || value === undefined) return null;
+  if (isRecord(value) && typeof value.ok === 'boolean') return { ok: value.ok };
+  throw new Error('the scoring report has a malformed build result');
 }
 
 function readFindings(value: unknown, tool: string): ToolFinding[] | null {

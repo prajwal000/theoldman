@@ -1,0 +1,3 @@
+Order confirmations now go through a small job queue in Postgres (`src/lib/jobs.ts`). Placing an order queues an `order-confirmation` job in the same transaction as the order, and `runDueJobs()` claims due jobs with `FOR UPDATE SKIP LOCKED`, so overlapping workers run each job once. A failed job is retried after `JOB_RETRY_DELAY_MS`, at most three attempts, then kept as `FAILED` with its error.
+
+`npm run worker` runs the queue every two seconds. It needs `tsx` (new dev dependency) because the worker is a TypeScript script outside Next.js: plain `node` cannot load the app's extensionless TypeScript imports or the generated Prisma client.

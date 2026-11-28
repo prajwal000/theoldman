@@ -16,7 +16,13 @@ export interface Task {
   readonly prompt: string;
   /** Folders copied in this order to make the starter: the base, then the task's own. */
   readonly starterDirs: readonly string[];
+  /** The task's own hidden tests. */
   readonly hiddenTestsDir: string;
+  /**
+   * Folders copied over the project, in this order, before the tests run: the base's shared hidden
+   * helpers (evals/hidden-support/<base>/), when there are any, then the task's hidden tests.
+   */
+  readonly hiddenDirs: readonly string[];
   readonly timeoutMinutes: number;
   readonly services: readonly Service[];
 }
@@ -63,6 +69,7 @@ export function loadTask(
     throw invalid(`"services" must be a list of: ${SERVICES.join(', ')}.`);
   }
   const starterDirs: string[] = [];
+  const hiddenDirs: string[] = [];
   if (base !== undefined) {
     if (typeof base !== 'string' || !BASE_NAME.test(base)) {
       throw invalid('"base" must name a folder in evals/starters/, such as "next-prisma".');
@@ -72,6 +79,8 @@ export function loadTask(
       throw invalid(`"base" starter "${base}" does not exist in evals/starters/.`);
     }
     starterDirs.push(baseDir);
+    const support = join(startersDir, '..', 'hidden-support', base);
+    if (existsSync(support) && statSync(support).isDirectory()) hiddenDirs.push(support);
   }
   if (starter !== undefined || base === undefined) {
     starterDirs.push(taskFolder(dir, starter, 'starter', invalid));
@@ -85,6 +94,7 @@ export function loadTask(
   if (readdirSync(hiddenTestsDir).length === 0) {
     throw invalid('the "hiddenTests" folder is empty.');
   }
+  hiddenDirs.push(hiddenTestsDir);
 
   const promptFile = join(dir, 'prompt.md');
   if (!existsSync(promptFile)) throw new ConfigError(`${where('prompt.md')} is missing.`);
@@ -98,6 +108,7 @@ export function loadTask(
     prompt,
     starterDirs,
     hiddenTestsDir,
+    hiddenDirs,
     timeoutMinutes,
     services,
   };

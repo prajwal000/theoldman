@@ -17,6 +17,7 @@ import {
   requireDocker,
 } from './docker.ts';
 import { AGENT_IMAGE, IMAGES, imageRefs } from './images.ts';
+import { removeOrphans } from './orphans.ts';
 import type { RunPlan } from './plan.ts';
 import type { Env, Provider } from './provider.ts';
 import { dockerEnv, scrub, secretValues } from './secrets.ts';
@@ -75,6 +76,7 @@ export async function executeRuns(ctx: ExecuteContext): Promise<RunRecord[]> {
   const env = dockerEnv(ctx.env, ctx.provider);
   const secrets = secretValues(ctx.env);
   await requireDocker(ctx.docker, env);
+  await removeOrphans(ctx.docker, env);
   const images = await prepareImages(ctx, env, secrets);
   const records: RunRecord[] = [];
   for (let run = 1; run <= ctx.plan.runs; run++) {
@@ -118,7 +120,11 @@ async function runOnce(
   const project = `theoldman-eval-${basename(ctx.runDir)}-${name}`
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, '-');
-  const composeEnv: NodeJS.ProcessEnv = { ...env, AGENT_IMAGE };
+  const composeEnv: NodeJS.ProcessEnv = {
+    ...env,
+    AGENT_IMAGE,
+    THEOLDMAN_OWNER: String(process.pid),
+  };
   if (images.postgres !== undefined) composeEnv.POSTGRES_IMAGE = images.postgres;
   const profiles = task.services.flatMap((service) => ['--profile', service]);
   const composeArgs = (args: readonly string[]): string[] => [

@@ -91,6 +91,17 @@ describe('loadTask with a base starter', () => {
     expect(loadTask(tasks(), 'sample').starterDirs).toEqual([join(starters(), 'shop')]);
   });
 
+  it("adds the base's shared hidden helpers before the task's hidden tests", () => {
+    write({ base: 'shop' });
+    const own = join(tasks(), 'sample', 'hidden');
+    expect(loadTask(tasks(), 'sample').hiddenDirs).toEqual([own]);
+    mkdirSync(join(root, 'hidden-support', 'shop'), { recursive: true });
+    expect(loadTask(tasks(), 'sample').hiddenDirs).toEqual([
+      join(root, 'hidden-support', 'shop'),
+      own,
+    ]);
+  });
+
   it("copies the task's starter over the base", () => {
     mkdirSync(join(tasks(), 'sample', 'overlay'));
     write({ base: 'shop', starter: 'overlay' });
