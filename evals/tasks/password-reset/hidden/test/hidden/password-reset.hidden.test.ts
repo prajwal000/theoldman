@@ -1,12 +1,19 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { POST as login } from '../../src/app/api/auth/login/route';
 import { GET as me } from '../../src/app/api/users/me/route';
 import { outbox } from '../../src/lib/email';
 import { ageDatabase, call, createUser, resetDatabase } from './support';
 
+// The prompt names APP_URL. A careful solution refuses to send links without it, so the tests
+// set it, as a deployment would.
 beforeEach(async () => {
+  vi.stubEnv('APP_URL', 'https://shop.example.com');
   await resetDatabase();
   outbox.length = 0;
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 // Imported when a test runs, so on the starter, where they do not exist, each test fails on its
