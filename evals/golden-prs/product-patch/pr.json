@@ -1,0 +1,14 @@
+{
+  "title": "Let admins update a product's name or price",
+  "description": "Adds PATCH /api/products/:id. Admins send `name`, `priceCents` or both; fields left out keep their value. A price of 0 is allowed, for free samples. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "product-patch",
+  "comments": [
+    {
+      "id": "falsy-zero",
+      "file": "src/app/api/products/[id]/route.ts",
+      "line": 41,
+      "issue": "`||` treats a price of 0 as missing, so setting a product's price to 0 (free samples, which the PR allows) silently keeps the old price; use `??` or check for undefined."
+    }
+  ]
+}

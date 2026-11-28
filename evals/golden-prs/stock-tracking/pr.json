@@ -1,0 +1,14 @@
+{
+  "title": "Track stock and refuse orders we cannot fill",
+  "description": "Products get an optional stock count; products without one, such as e-books, are not tracked. Placing an order takes the items out of stock, and an order larger than the stock is refused with 409. Includes the migration, tests and a README note.",
+  "base": "next-prisma",
+  "branch": "stock-tracking",
+  "comments": [
+    {
+      "id": "lost-update",
+      "file": "src/app/api/orders/route.ts",
+      "line": 42,
+      "issue": "Stock is read, checked and written back as `product.stock - quantity` inside a transaction at Postgres's default READ COMMITTED level, which does not lock the row, so two concurrent orders can both pass the check and both write their own result: stock is oversold and one decrement is lost. Use a conditional atomic update (`updateMany` where `stock >= quantity` with `decrement`) or lock the row."
+    }
+  ]
+}

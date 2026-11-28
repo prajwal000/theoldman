@@ -1,0 +1,108 @@
+diff --git a/README.md b/README.md
+index 28ad73e..ae77a94 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                             | What                                            |
++| --------------------------------- | ----------------------------------------------- |
++| `POST /api/auth/signup`           | Create an account: `email`, `name`, `password`. |
++| `POST /api/auth/login`            | Sign in: `email`, `password`.                   |
++| `GET /api/users/me`               | The signed-in user.                             |
++| `GET /api/products`               | All products, newest first.                     |
++| `POST /api/products`              | Add a product (admin): `name`, `priceCents`.    |
++| `GET /api/products/:id`           | One product.                                    |
++| `DELETE /api/products/:id`        | Delete a product (admin).                       |
++| `GET /api/orders`                 | The signed-in user's orders.                    |
++| `POST /api/orders`                | Order a product: `productId`, `quantity`.       |
++| `GET /api/admin/users/:id/orders` | A customer's orders, newest first (admin).      |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/users/[id]/orders/route.ts b/src/app/api/admin/users/[id]/orders/route.ts
+new file mode 100644
+index 0000000..47c45bc
+--- /dev/null
++++ b/src/app/api/admin/users/[id]/orders/route.ts
+@@ -0,0 +1,22 @@
++import { getCurrentUser } from '../../../../../../lib/auth';
++import { db } from '../../../../../../lib/db';
++import { jsonError } from '../../../../../../lib/http';
++
++interface Context {
++  readonly params: Promise<{ id: string }>;
++}
++
++export async function GET(request: Request, { params }: Context): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, "only admins can see a customer's orders");
++
++  const { id } = await params;
++  if ((await db.user.count({ where: { id } })) === 0) return jsonError(404, 'customer not found');
++  const orders = await db.order.findMany({
++    where: { userId: id },
++    include: { product: { select: { id: true, name: true } } },
++    orderBy: { createdAt: 'desc' },
++  });
++  return Response.json(orders);
++}
+diff --git a/test/admin-customer-orders.test.ts b/test/admin-customer-orders.test.ts
+new file mode 100644
+index 0000000..f8061cc
+--- /dev/null
++++ b/test/admin-customer-orders.test.ts
+@@ -0,0 +1,41 @@
++import { beforeAll, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/admin/users/[id]/orders/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, params, resetDatabase } from './helpers';
++
++beforeAll(resetDatabase);
++
++let adminToken = '';
++let customer = { id: '', token: '' };
++
++function customerOrders(id: string, token: string) {
++  return GET(jsonRequest(`/api/admin/users/${id}/orders`, { token }), params({ id }));
++}
++
++describe("a customer's orders, for admins", () => {
++  it('lists nothing before the first order', async () => {
++    adminToken = (await createUser('ADMIN')).token;
++    const { user, token } = await createUser();
++    customer = { id: user.id, token };
++    const response = await customerOrders(customer.id, adminToken);
++    expect(response.status).toBe(200);
++    expect(await response.json()).toEqual([]);
++  });
++
++  it("lists the customer's orders once they order", async () => {
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    await db.order.create({
++      data: { userId: customer.id, productId: product.id, quantity: 1, totalCents: 1200 },
++    });
++    const response = await customerOrders(customer.id, adminToken);
++    expect(await response.json()).toMatchObject([{ product: { name: 'Mug' }, totalCents: 1200 }]);
++  });
++
++  it('refuses customers', async () => {
++    expect((await customerOrders(customer.id, customer.token)).status).toBe(403);
++  });
++
++  it('answers 404 for an unknown customer', async () => {
++    expect((await customerOrders('missing', adminToken)).status).toBe(404);
++  });
++});

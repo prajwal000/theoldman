@@ -1,0 +1,8 @@
+{
+  "title": "Show the order count on the profile",
+  "description": "The account page shows how many orders a customer has placed. GET /api/users/me now also returns `orderCount`; the existing `user` field is unchanged. Includes tests and a README update.",
+  "base": "next-prisma",
+  "branch": "profile-order-count",
+  "clean": true,
+  "comments": []
+}

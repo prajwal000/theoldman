@@ -1,0 +1,71 @@
+diff --git a/README.md b/README.md
+index 28ad73e..9ebaf57 100644
+--- a/README.md
++++ b/README.md
+@@ -42,4 +42,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
++`POST /api/orders` takes 5% off orders of 5 or more of one product and 10% off 10 or more, rounded to the cent.
++
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..15dbb31 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -1,6 +1,7 @@
+ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
++import { orderTotal } from '../../../lib/pricing';
+ 
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+@@ -35,7 +36,7 @@ export async function POST(request: Request): Promise<Response> {
+       userId: user.id,
+       productId: product.id,
+       quantity: body.quantity,
+-      totalCents: product.priceCents * body.quantity,
++      totalCents: orderTotal(product.priceCents, body.quantity),
+     },
+   });
+   return Response.json(order, { status: 201 });
+diff --git a/src/lib/pricing.ts b/src/lib/pricing.ts
+new file mode 100644
+index 0000000..ac54e05
+--- /dev/null
++++ b/src/lib/pricing.ts
+@@ -0,0 +1,5 @@
++/** Tiered discounts on one product: 5% off 5 or more, 10% off 10 or more, rounded to the cent. */
++export function orderTotal(priceCents: number, quantity: number): number {
++  const percentOff = quantity >= 10 ? 10 : quantity >= 5 ? 5 : 0;
++  return Math.round((priceCents * quantity * (100 - percentOff)) / 100);
++}
+diff --git a/test/orders-pricing.test.ts b/test/orders-pricing.test.ts
+new file mode 100644
+index 0000000..c64f49e
+--- /dev/null
++++ b/test/orders-pricing.test.ts
+@@ -0,0 +1,22 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/orders/route';
++import { db } from '../src/lib/db';
++import { orderTotal } from '../src/lib/pricing';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('tiered pricing', () => {
++  for (const quantity of [1, 4, 5, 9, 10, 25]) {
++    it(`charges the tier price for ${String(quantity)}`, async () => {
++      const { token } = await createUser();
++      const product = await db.product.create({ data: { name: 'Mug', priceCents: 999 } });
++      const response = await POST(
++        jsonRequest('/api/orders', { body: { productId: product.id, quantity }, token }),
++      );
++      expect(response.status).toBe(201);
++      const order = (await response.json()) as { totalCents: number };
++      expect(order.totalCents).toBe(orderTotal(product.priceCents, quantity));
++    });
++  }
++});

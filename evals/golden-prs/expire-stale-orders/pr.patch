@@ -1,0 +1,100 @@
+diff --git a/README.md b/README.md
+index 28ad73e..686a135 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,17 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                          | What                                              |
++| ------------------------------ | ------------------------------------------------- |
++| `POST /api/auth/signup`        | Create an account: `email`, `name`, `password`.   |
++| `POST /api/auth/login`         | Sign in: `email`, `password`.                     |
++| `GET /api/users/me`            | The signed-in user.                               |
++| `GET /api/products`            | All products, newest first.                       |
++| `POST /api/products`           | Add a product (admin): `name`, `priceCents`.      |
++| `GET /api/products/:id`        | One product.                                      |
++| `DELETE /api/products/:id`     | Delete a product (admin).                         |
++| `GET /api/orders`              | The signed-in user's orders.                      |
++| `POST /api/orders`             | Order a product: `productId`, `quantity`.         |
++| `GET /api/admin/orders/expire` | Cancel pending orders older than 14 days (admin). |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/orders/expire/route.ts b/src/app/api/admin/orders/expire/route.ts
+new file mode 100644
+index 0000000..11cb570
+--- /dev/null
++++ b/src/app/api/admin/orders/expire/route.ts
+@@ -0,0 +1,19 @@
++import { getCurrentUser } from '../../../../../lib/auth';
++import { db } from '../../../../../lib/db';
++import { jsonError } from '../../../../../lib/http';
++
++const STALE_DAYS = 14;
++
++/** Cancels pending orders that were never paid, for the ops dashboard's "expire stale orders" link. */
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can expire orders');
++
++  const cutoff = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000);
++  const { count } = await db.order.updateMany({
++    where: { status: 'PENDING', createdAt: { lt: cutoff } },
++    data: { status: 'CANCELLED' },
++  });
++  return Response.json({ cancelled: count });
++}
+diff --git a/test/admin-expire-orders.test.ts b/test/admin-expire-orders.test.ts
+new file mode 100644
+index 0000000..1850d3f
+--- /dev/null
++++ b/test/admin-expire-orders.test.ts
+@@ -0,0 +1,36 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET as expire } from '../src/app/api/admin/orders/expire/route';
++import { db } from '../src/lib/db';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++const DAY_MS = 24 * 60 * 60 * 1000;
++
++describe('expiring stale orders', () => {
++  it('cancels pending orders older than 14 days, and nothing else', async () => {
++    const { user, token } = await createUser('ADMIN');
++    const product = await db.product.create({ data: { name: 'Mug', priceCents: 1200 } });
++    const base = { userId: user.id, productId: product.id, quantity: 1, totalCents: 1200 };
++    const old = new Date(Date.now() - 15 * DAY_MS);
++    const stale = await db.order.create({ data: { ...base, createdAt: old } });
++    const paid = await db.order.create({ data: { ...base, createdAt: old, status: 'PAID' } });
++    const fresh = await db.order.create({
++      data: { ...base, createdAt: new Date(Date.now() - DAY_MS) },
++    });
++
++    const response = await expire(jsonRequest('/api/admin/orders/expire', { token }));
++    expect(await response.json()).toEqual({ cancelled: 1 });
++    const statuses = await db.order.findMany({ select: { id: true, status: true } });
++    expect(Object.fromEntries(statuses.map((o) => [o.id, o.status]))).toEqual({
++      [stale.id]: 'CANCELLED',
++      [paid.id]: 'PAID',
++      [fresh.id]: 'PENDING',
++    });
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    expect((await expire(jsonRequest('/api/admin/orders/expire', { token }))).status).toBe(403);
++  });
++});

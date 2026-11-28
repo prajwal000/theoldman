@@ -1,0 +1,62 @@
+diff --git a/README.md b/README.md
+index 28ad73e..1d62cbe 100644
+--- a/README.md
++++ b/README.md
+@@ -42,4 +42,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
+ 
++`GET /api/orders` may be cached for 30 seconds.
++
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..cfdccb7 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -2,6 +2,9 @@ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
++/** The order page polls this list; a short cache lets the CDN absorb most of those requests. */
++const LIST_CACHE_SECONDS = 30;
++
+ export async function GET(request: Request): Promise<Response> {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+@@ -10,7 +13,9 @@ export async function GET(request: Request): Promise<Response> {
+     include: { product: { select: { id: true, name: true } } },
+     orderBy: { createdAt: 'desc' },
+   });
+-  return Response.json(orders);
++  return Response.json(orders, {
++    headers: { 'cache-control': `public, max-age=${LIST_CACHE_SECONDS}` },
++  });
+ }
+ 
+ export async function POST(request: Request): Promise<Response> {
+diff --git a/test/orders-cache.test.ts b/test/orders-cache.test.ts
+new file mode 100644
+index 0000000..3f30b62
+--- /dev/null
++++ b/test/orders-cache.test.ts
+@@ -0,0 +1,20 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/orders/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('order list caching', () => {
++  it('lets the order list be cached for 30 seconds', async () => {
++    const { token } = await createUser();
++    const response = await GET(jsonRequest('/api/orders', { token }));
++    expect(response.status).toBe(200);
++    expect(response.headers.get('cache-control')).toBe('public, max-age=30');
++  });
++
++  it('does not cache the refusal for anonymous requests', async () => {
++    const response = await GET(jsonRequest('/api/orders'));
++    expect(response.status).toBe(401);
++    expect(response.headers.get('cache-control')).toBeNull();
++  });
++});

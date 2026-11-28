@@ -1,0 +1,14 @@
+{
+  "title": "Let customers share an order with a link",
+  "description": "Customers want to show friends what they bought. POST /api/orders/:id/share gives a link for one of your orders, and GET /api/shared/:token shows the product, quantity and total, without the customer. Includes the migration, tests and README entries.",
+  "base": "next-prisma",
+  "branch": "order-share-link",
+  "comments": [
+    {
+      "id": "weak-random",
+      "file": "src/app/api/orders/[id]/share/route.ts",
+      "line": 10,
+      "issue": "Share tokens come from `Math.random()`, which is not cryptographically secure and here gives about 41 bits, so links can be predicted or guessed to read other customers' orders; use `randomBytes` (as `createSession` does)."
+    }
+  ]
+}

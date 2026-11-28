@@ -1,0 +1,14 @@
+{
+  "title": "Rename the migration scripts",
+  "description": "Our other services name their Prisma scripts `migrate:dev` and `migrate:deploy`; this one matches them, so the shared deploy pipeline can run `npm run migrate:deploy` everywhere.",
+  "base": "next-prisma",
+  "branch": "migrate-script-names",
+  "comments": [
+    {
+      "id": "stale-readme",
+      "file": "package.json",
+      "line": 12,
+      "issue": "The README still tells developers to run `npm run db:migrate` and says deploys run `npm run db:deploy`; both scripts no longer exist, so following the docs fails. Update the README with the new names."
+    }
+  ]
+}

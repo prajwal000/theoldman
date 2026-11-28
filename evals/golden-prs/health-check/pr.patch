@@ -1,0 +1,60 @@
+diff --git a/README.md b/README.md
+index 28ad73e..036982c 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/health`          | 200 while the database is reachable, else 503.  |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/health/route.ts b/src/app/api/health/route.ts
+new file mode 100644
+index 0000000..b11d0cc
+--- /dev/null
++++ b/src/app/api/health/route.ts
+@@ -0,0 +1,13 @@
++import { db } from '../../../lib/db';
++import { jsonError } from '../../../lib/http';
++
++/** For the load balancer: 200 while the app can reach its database, 503 when it cannot. */
++export async function GET(): Promise<Response> {
++  try {
++    await db.$queryRaw`SELECT 1`;
++  } catch (error) {
++    console.error('health check: database unreachable', error);
++    return jsonError(503, 'database unreachable');
++  }
++  return Response.json({ ok: true }, { headers: { 'cache-control': 'no-store' } });
++}
+diff --git a/test/health.test.ts b/test/health.test.ts
+new file mode 100644
+index 0000000..070217c
+--- /dev/null
++++ b/test/health.test.ts
+@@ -0,0 +1,24 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { GET } from '../src/app/api/health/route';
++import { db } from '../src/lib/db';
++
++afterEach(() => {
++  vi.restoreAllMocks();
++});
++
++describe('health check', () => {
++  it('answers 200 while the database is reachable', async () => {
++    const response = await GET();
++    expect(response.status).toBe(200);
++    expect(await response.json()).toEqual({ ok: true });
++    expect(response.headers.get('cache-control')).toBe('no-store');
++  });
++
++  it('answers 503 when the database is not', async () => {
++    vi.spyOn(console, 'error').mockImplementation(() => undefined);
++    vi.spyOn(db, '$queryRaw').mockRejectedValue(new Error('connection refused'));
++    const response = await GET();
++    expect(response.status).toBe(503);
++    expect(await response.json()).toEqual({ error: 'database unreachable' });
++  });
++});

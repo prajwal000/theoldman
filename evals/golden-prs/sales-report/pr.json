@@ -1,0 +1,14 @@
+{
+  "title": "Add a sales report for a range of days",
+  "description": "Adds GET /api/admin/sales?from=&to= for admins: the number and total of paid orders placed from the start of `from` to the end of `to` (UTC days, YYYY-MM-DD). Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "sales-report",
+  "comments": [
+    {
+      "id": "copy-paste",
+      "file": "src/app/api/admin/sales/route.ts",
+      "line": 22,
+      "issue": "`to` is parsed from the `from` parameter (copy-paste), so `to` is ignored: every report covers only the first day, and a missing or bad `to` is not refused."
+    }
+  ]
+}

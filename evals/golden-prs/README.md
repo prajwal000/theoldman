@@ -29,6 +29,36 @@ Area is where the planted problem sits, so a new PR can cover a problem the set 
 | `order-confirmation-email` | bug       | docs            | Confirmation email for each order             | New required `EMAIL_FROM` is not documented                                   |
 | `order-status-filter`      | bug       | docs            | Filter the order list by status               | README names the parameter `state`; the code reads `status`                   |
 | `sign-out-everywhere`      | bug       | docs            | Sign out on every device                      | The doc comment says the current session stays signed in                      |
+| `product-patch`            | bug       | logic           | Update a product's name or price              | `\|\|` drops a price of 0, so it cannot be set                                |
+| `customer-lookup`          | bug       | logic           | Support finds a customer by email             | Email is not lowercased and trimmed like at signup                            |
+| `price-range`              | bug       | logic           | Lowest and highest product price              | `sort()` without a comparator sorts numbers as strings                        |
+| `sales-report`             | bug       | logic           | Paid orders between two days                  | Copy-paste: `to` is read from the `from` parameter                            |
+| `signup-optional-name`     | bug       | security        | Name is optional at signup                    | Mass assignment: the rest of the body, `role` included, is saved              |
+| `order-share-link`         | bug       | security        | Share an order with a link                    | Share tokens come from `Math.random()`                                        |
+| `login-audit-log`          | bug       | security        | Log failed sign-ins                           | The password tried is written to the log                                      |
+| `printable-receipt`        | bug       | security        | HTML receipt page                             | User and product names are not escaped: stored XSS                            |
+| `product-manuals`          | bug       | security        | Serve product manual PDFs                     | Path traversal through `?file=`                                               |
+| `stock-tracking`           | bug       | database        | Stock that refuses orders it cannot fill      | Lost update: stock is read, checked and written back without a lock           |
+| `coupon-codes`             | bug       | database        | Admins create coupon codes                    | Uniqueness by check-then-insert only, no unique constraint                    |
+| `delete-spam-accounts`     | bug       | database        | Admins delete spam accounts                   | Deleting a user cascades to all their orders, paid ones too                   |
+| `expire-stale-orders`      | bug       | api             | Admins expire stale unpaid orders             | A GET request changes data                                                    |
+| `json-errors`              | bug       | api             | JSON bodies for unexpected errors             | Error messages and stack traces go to the client                              |
+| `cache-order-list`         | bug       | api             | Cache the order list briefly                  | Per-user response marked `Cache-Control: public`                              |
+| `tiered-pricing`           | bug       | tests           | Tiered discounts on orders                    | Expected totals are computed by the function under test                       |
+| `customer-orders-admin`    | bug       | tests           | Admins see a customer's orders                | Tests share state from the first test and depend on order                     |
+| `remove-cancelled-orders`  | bug       | tests           | Remove cancelled orders from history          | The assertion sits in a `catch` that never runs                               |
+| `migrate-script-names`     | bug       | docs            | Rename the migration scripts                  | README still uses the old script names                                        |
+| `document-errors`          | bug       | docs            | Document errors and order limits              | README promises a quantity cap nothing enforces                               |
+| `profile-order-count`      | clean     |                 | Order count on the profile                    | None                                                                          |
+| `product-name-length`      | clean     |                 | Product names up to 200 characters            | None                                                                          |
+| `cancel-pending-order`     | clean     |                 | Customers cancel their own pending orders     | None                                                                          |
+| `stable-product-order`     | clean     |                 | Stable order for products created together    | None                                                                          |
+| `signup-blank-name`        | clean     |                 | Refuse a blank name at signup                 | None                                                                          |
+| `health-check`             | clean     |                 | Health check for the load balancer            | None                                                                          |
+| `my-sessions`              | clean     |                 | List your signed-in sessions                  | None                                                                          |
+| `order-quantity-cap`       | clean     |                 | Cap orders at 100 of one product              | None                                                                          |
+| `sign-out`                 | clean     |                 | Sign out this session                         | None                                                                          |
+| `require-admin-helper`     | clean     |                 | Share the admin check between routes          | None                                                                          |
 
 ## Format
 

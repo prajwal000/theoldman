@@ -1,0 +1,59 @@
+diff --git a/README.md b/README.md
+index 28ad73e..97a2d33 100644
+--- a/README.md
++++ b/README.md
+@@ -30,6 +30,8 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
++Failed sign-ins at `POST /api/auth/login` are logged with the email tried.
++
+ | Route                      | What                                            |
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+diff --git a/src/app/api/auth/login/route.ts b/src/app/api/auth/login/route.ts
+index 9ac4955..94559d5 100644
+--- a/src/app/api/auth/login/route.ts
++++ b/src/app/api/auth/login/route.ts
+@@ -9,6 +9,8 @@ export async function POST(request: Request): Promise<Response> {
+   }
+   const user = await db.user.findUnique({ where: { email: body.email.trim().toLowerCase() } });
+   if (user === null || !(await verifyPassword(body.password, user.passwordHash))) {
++    // Failed sign-ins go to the server log, so the ops dashboard can spot credential stuffing.
++    console.warn('failed sign-in', JSON.stringify(body));
+     return jsonError(401, 'wrong email or password');
+   }
+   const token = await createSession(user.id);
+diff --git a/test/login-log.test.ts b/test/login-log.test.ts
+new file mode 100644
+index 0000000..89ab3c6
+--- /dev/null
++++ b/test/login-log.test.ts
+@@ -0,0 +1,27 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { POST as login } from '../src/app/api/auth/login/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++afterEach(() => {
++  vi.restoreAllMocks();
++});
++
++describe('sign-in log', () => {
++  it('logs a failed sign-in with the email tried', async () => {
++    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
++    const { user } = await createUser();
++    const body = { email: user.email, password: 'not the password' };
++    expect((await login(jsonRequest('/api/auth/login', { body }))).status).toBe(401);
++    expect(warn).toHaveBeenCalledTimes(1);
++    expect(String(warn.mock.calls[0]?.[1])).toContain(user.email);
++  });
++
++  it('logs nothing for a successful sign-in', async () => {
++    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
++    const { user } = await createUser();
++    const body = { email: user.email, password: 'correct horse battery' };
++    expect((await login(jsonRequest('/api/auth/login', { body }))).status).toBe(200);
++    expect(warn).not.toHaveBeenCalled();
++  });
++});

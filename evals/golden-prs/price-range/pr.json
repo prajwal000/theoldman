@@ -1,0 +1,14 @@
+{
+  "title": "Add the price range for the storefront filter",
+  "description": "The storefront's price slider needs its ends. Adds GET /api/products/price-range with the lowest and highest product price, or nulls when there are no products. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "price-range",
+  "comments": [
+    {
+      "id": "string-sort",
+      "file": "src/app/api/products/price-range/route.ts",
+      "line": 6,
+      "issue": "`Array.prototype.sort()` with no comparator sorts numbers as strings, so prices with different numbers of digits come out wrong (900 and 1200 give min 1200, max 900); use `(a, b) => a - b`, or let the database compute `_min` and `_max`."
+    }
+  ]
+}

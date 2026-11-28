@@ -1,0 +1,8 @@
+{
+  "title": "Refuse a blank name at signup",
+  "description": "Some accounts were created with a name of only spaces, which shows as nothing on the account page. POST /api/auth/signup now refuses a name that is empty after trimming. Includes a test and a README update.",
+  "base": "next-prisma",
+  "branch": "signup-blank-name",
+  "clean": true,
+  "comments": []
+}

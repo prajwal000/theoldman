@@ -1,0 +1,8 @@
+{
+  "title": "List your signed-in sessions",
+  "description": "First part of a \"where you're signed in\" page. Adds GET /api/users/me/sessions with the signed-in user's unexpired sessions: id, created and expiry times, newest first. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "my-sessions",
+  "clean": true,
+  "comments": []
+}

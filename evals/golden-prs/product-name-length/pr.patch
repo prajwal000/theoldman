@@ -1,0 +1,83 @@
+diff --git a/README.md b/README.md
+index 28ad73e..636919f 100644
+--- a/README.md
++++ b/README.md
+@@ -30,16 +30,16 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
+-| Route                      | What                                            |
+-| -------------------------- | ----------------------------------------------- |
+-| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+-| `POST /api/auth/login`     | Sign in: `email`, `password`.                   |
+-| `GET /api/users/me`        | The signed-in user.                             |
+-| `GET /api/products`        | All products, newest first.                     |
+-| `POST /api/products`       | Add a product (admin): `name`, `priceCents`.    |
+-| `GET /api/products/:id`    | One product.                                    |
+-| `DELETE /api/products/:id` | Delete a product (admin).                       |
+-| `GET /api/orders`          | The signed-in user's orders.                    |
+-| `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| Route                      | What                                                                |
++| -------------------------- | ------------------------------------------------------------------- |
++| `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`.                     |
++| `POST /api/auth/login`     | Sign in: `email`, `password`.                                       |
++| `GET /api/users/me`        | The signed-in user.                                                 |
++| `GET /api/products`        | All products, newest first.                                         |
++| `POST /api/products`       | Add a product (admin): `name` (up to 200 characters), `priceCents`. |
++| `GET /api/products/:id`    | One product.                                                        |
++| `DELETE /api/products/:id` | Delete a product (admin).                                           |
++| `GET /api/orders`          | The signed-in user's orders.                                        |
++| `POST /api/orders`         | Order a product: `productId`, `quantity`.                           |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/products/route.ts b/src/app/api/products/route.ts
+index 61b4d7f..28fcdf2 100644
+--- a/src/app/api/products/route.ts
++++ b/src/app/api/products/route.ts
+@@ -2,6 +2,8 @@ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+ import { isRecord, jsonError, readJson } from '../../../lib/http';
+ 
++const MAX_NAME_LENGTH = 200;
++
+ export async function GET(): Promise<Response> {
+   const products = await db.product.findMany({ orderBy: { createdAt: 'desc' } });
+   return Response.json(products);
+@@ -17,11 +19,15 @@ export async function POST(request: Request): Promise<Response> {
+     !isRecord(body) ||
+     typeof body.name !== 'string' ||
+     body.name.trim() === '' ||
++    body.name.trim().length > MAX_NAME_LENGTH ||
+     typeof body.priceCents !== 'number' ||
+     !Number.isInteger(body.priceCents) ||
+     body.priceCents < 0
+   ) {
+-    return jsonError(400, 'name and a whole, non-negative priceCents are required');
++    return jsonError(
++      400,
++      `a name of 1 to ${MAX_NAME_LENGTH} characters and a whole, non-negative priceCents are required`,
++    );
+   }
+   const product = await db.product.create({
+     data: { name: body.name.trim(), priceCents: body.priceCents },
+diff --git a/test/products-name.test.ts b/test/products-name.test.ts
+new file mode 100644
+index 0000000..1d11f9c
+--- /dev/null
++++ b/test/products-name.test.ts
+@@ -0,0 +1,15 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { POST } from '../src/app/api/products/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++describe('product name length', () => {
++  it('accepts 200 characters and refuses 201', async () => {
++    const { token } = await createUser('ADMIN');
++    const add = (name: string) =>
++      POST(jsonRequest('/api/products', { body: { name, priceCents: 100 }, token }));
++    expect((await add(` ${'a'.repeat(200)} `)).status).toBe(201);
++    expect((await add('a'.repeat(201))).status).toBe(400);
++  });
++});

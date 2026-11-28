@@ -1,0 +1,142 @@
+diff --git a/README.md b/README.md
+index 28ad73e..ac4bf5d 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,7 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/admin/coupons`   | All coupons (admin).                            |
++| `POST /api/admin/coupons`  | Create a coupon (admin): `code`, `percentOff`.  |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/prisma/migrations/20261203120000_coupons/migration.sql b/prisma/migrations/20261203120000_coupons/migration.sql
+new file mode 100644
+index 0000000..78695ba
+--- /dev/null
++++ b/prisma/migrations/20261203120000_coupons/migration.sql
+@@ -0,0 +1,9 @@
++-- CreateTable
++CREATE TABLE "Coupon" (
++    "id" TEXT NOT NULL,
++    "code" TEXT NOT NULL,
++    "percentOff" INTEGER NOT NULL,
++    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
++
++    CONSTRAINT "Coupon_pkey" PRIMARY KEY ("id")
++);
+diff --git a/prisma/schema.prisma b/prisma/schema.prisma
+index d05fee6..7d1338f 100644
+--- a/prisma/schema.prisma
++++ b/prisma/schema.prisma
+@@ -46,6 +46,13 @@ model Product {
+   orders     Order[]
+ }
+ 
++model Coupon {
++  id         String   @id @default(cuid())
++  code       String
++  percentOff Int
++  createdAt  DateTime @default(now())
++}
++
+ model Order {
+   id         String      @id @default(cuid())
+   userId     String
+diff --git a/src/app/api/admin/coupons/route.ts b/src/app/api/admin/coupons/route.ts
+new file mode 100644
+index 0000000..ef187a2
+--- /dev/null
++++ b/src/app/api/admin/coupons/route.ts
+@@ -0,0 +1,41 @@
++import { getCurrentUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { isRecord, jsonError, readJson } from '../../../../lib/http';
++
++async function requireAdmin(request: Request): Promise<Response | null> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can manage coupons');
++  return null;
++}
++
++export async function GET(request: Request): Promise<Response> {
++  const refused = await requireAdmin(request);
++  if (refused !== null) return refused;
++  const coupons = await db.coupon.findMany({ orderBy: { createdAt: 'desc' } });
++  return Response.json(coupons);
++}
++
++export async function POST(request: Request): Promise<Response> {
++  const refused = await requireAdmin(request);
++  if (refused !== null) return refused;
++
++  const body = await readJson(request);
++  const code =
++    isRecord(body) && typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
++  const percentOff = isRecord(body) ? body.percentOff : undefined;
++  if (
++    !/^[A-Z0-9]{3,20}$/.test(code) ||
++    typeof percentOff !== 'number' ||
++    !Number.isInteger(percentOff) ||
++    percentOff < 1 ||
++    percentOff > 100
++  ) {
++    return jsonError(400, 'code must be 3 to 20 letters or digits, percentOff a whole 1 to 100');
++  }
++  if ((await db.coupon.findFirst({ where: { code } })) !== null) {
++    return jsonError(409, 'a coupon with this code already exists');
++  }
++  const coupon = await db.coupon.create({ data: { code, percentOff } });
++  return Response.json(coupon, { status: 201 });
++}
+diff --git a/test/admin-coupons.test.ts b/test/admin-coupons.test.ts
+new file mode 100644
+index 0000000..2dbd94e
+--- /dev/null
++++ b/test/admin-coupons.test.ts
+@@ -0,0 +1,44 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET, POST } from '../src/app/api/admin/coupons/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function create(body: unknown, token: string) {
++  return POST(jsonRequest('/api/admin/coupons', { body, token }));
++}
++
++describe('coupons', () => {
++  it('lets an admin create and list coupons', async () => {
++    const { token } = await createUser('ADMIN');
++    const response = await create({ code: ' save10 ', percentOff: 10 }, token);
++    expect(response.status).toBe(201);
++    expect(await response.json()).toMatchObject({ code: 'SAVE10', percentOff: 10 });
++    const list = await GET(jsonRequest('/api/admin/coupons', { token }));
++    expect(await list.json()).toMatchObject([{ code: 'SAVE10' }]);
++  });
++
++  it('refuses a code that already exists', async () => {
++    const { token } = await createUser('ADMIN');
++    await create({ code: 'SAVE10', percentOff: 10 }, token);
++    expect((await create({ code: 'save10', percentOff: 20 }, token)).status).toBe(409);
++  });
++
++  it('refuses a bad code or percentage', async () => {
++    const { token } = await createUser('ADMIN');
++    for (const body of [
++      { code: 'X', percentOff: 10 },
++      { code: 'SAVE 10', percentOff: 10 },
++      { code: 'SAVE10', percentOff: 0 },
++      { code: 'SAVE10', percentOff: 101 },
++    ]) {
++      expect((await create(body, token)).status).toBe(400);
++    }
++  });
++
++  it('refuses customers', async () => {
++    const { token } = await createUser();
++    expect((await create({ code: 'SAVE10', percentOff: 10 }, token)).status).toBe(403);
++    expect((await GET(jsonRequest('/api/admin/coupons', { token }))).status).toBe(403);
++  });
++});

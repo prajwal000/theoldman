@@ -1,0 +1,74 @@
+diff --git a/README.md b/README.md
+index 28ad73e..b82c537 100644
+--- a/README.md
++++ b/README.md
+@@ -41,5 +41,6 @@ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with t
+ | `DELETE /api/products/:id` | Delete a product (admin).                       |
+ | `GET /api/orders`          | The signed-in user's orders.                    |
+ | `POST /api/orders`         | Order a product: `productId`, `quantity`.       |
++| `GET /api/admin/users`     | Find a customer by `?email=` (admin).           |
+ 
+ Emails are not delivered yet: `sendEmail` in `src/lib/email.ts` keeps them in `outbox`.
+diff --git a/src/app/api/admin/users/route.ts b/src/app/api/admin/users/route.ts
+new file mode 100644
+index 0000000..05e92af
+--- /dev/null
++++ b/src/app/api/admin/users/route.ts
+@@ -0,0 +1,19 @@
++import { getCurrentUser, publicUser } from '../../../../lib/auth';
++import { db } from '../../../../lib/db';
++import { jsonError } from '../../../../lib/http';
++
++export async function GET(request: Request): Promise<Response> {
++  const user = await getCurrentUser(request);
++  if (user === null) return jsonError(401, 'sign in first');
++  if (user.role !== 'ADMIN') return jsonError(403, 'only admins can look up customers');
++
++  const email = new URL(request.url).searchParams.get('email');
++  if (email === null || email === '') return jsonError(400, 'email is required');
++
++  const customer = await db.user.findUnique({
++    where: { email },
++    include: { _count: { select: { orders: true } } },
++  });
++  if (customer === null) return jsonError(404, 'no customer with that email');
++  return Response.json({ user: publicUser(customer), orders: customer._count.orders });
++}
+diff --git a/test/admin-users.test.ts b/test/admin-users.test.ts
+new file mode 100644
+index 0000000..d75d93a
+--- /dev/null
++++ b/test/admin-users.test.ts
+@@ -0,0 +1,32 @@
++import { beforeEach, describe, expect, it } from 'vitest';
++import { GET } from '../src/app/api/admin/users/route';
++import { createUser, jsonRequest, resetDatabase } from './helpers';
++
++beforeEach(resetDatabase);
++
++function lookUp(email: string, token: string) {
++  return GET(jsonRequest(`/api/admin/users?email=${encodeURIComponent(email)}`, { token }));
++}
++
++describe('customer lookup', () => {
++  it('finds a customer by email with their order count', async () => {
++    const { token } = await createUser('ADMIN');
++    const { user: customer } = await createUser();
++    const response = await lookUp(customer.email, token);
++    expect(response.status).toBe(200);
++    expect(await response.json()).toEqual({
++      user: { id: customer.id, email: customer.email, name: customer.name, role: 'CUSTOMER' },
++      orders: 0,
++    });
++  });
++
++  it('answers 404 for an unknown email', async () => {
++    const { token } = await createUser('ADMIN');
++    expect((await lookUp('nobody@example.com', token)).status).toBe(404);
++  });
++
++  it('refuses customers', async () => {
++    const { user, token } = await createUser();
++    expect((await lookUp(user.email, token)).status).toBe(403);
++  });
++});

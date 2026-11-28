@@ -1,0 +1,14 @@
+{
+  "title": "Let admins expire stale unpaid orders",
+  "description": "Unpaid orders pile up. Adds /api/admin/orders/expire for the ops dashboard's \"expire stale orders\" link: it cancels pending orders older than 14 days and says how many. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "expire-stale-orders",
+  "comments": [
+    {
+      "id": "get-mutates",
+      "file": "src/app/api/admin/orders/expire/route.ts",
+      "line": 8,
+      "issue": "A GET request cancels orders. GETs should be safe: link prefetching, crawlers, retries and caches can trigger it, and because sessions also come from a cookie, any page an admin visits can fire it with an image tag (CSRF). Make it POST."
+    }
+  ]
+}

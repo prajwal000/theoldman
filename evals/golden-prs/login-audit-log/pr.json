@@ -1,0 +1,14 @@
+{
+  "title": "Log failed sign-ins",
+  "description": "Ops wants to see credential-stuffing attempts on the dashboard, which reads the server log. POST /api/auth/login now logs each failed sign-in with the email tried. Includes tests and a README note.",
+  "base": "next-prisma",
+  "branch": "login-audit-log",
+  "comments": [
+    {
+      "id": "password-logged",
+      "file": "src/app/api/auth/login/route.ts",
+      "line": 13,
+      "issue": "It logs the whole request body, including the password that was tried, often the user's real password with a typo or one from another site; log only the email (and IP), never the password."
+    }
+  ]
+}

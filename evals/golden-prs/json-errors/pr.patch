@@ -1,0 +1,105 @@
+diff --git a/README.md b/README.md
+index 28ad73e..1ea384d 100644
+--- a/README.md
++++ b/README.md
+@@ -30,6 +30,8 @@ The schema is in `prisma/schema.prisma`. Change it with Prisma Migrate (`npm run
+ 
+ Requests are JSON. Signed-in routes take `Authorization: Bearer <token>`, with the token from signup or login.
+ 
++`GET` and `POST /api/orders` answer unexpected errors with a JSON 500.
++
+ | Route                      | What                                            |
+ | -------------------------- | ----------------------------------------------- |
+ | `POST /api/auth/signup`    | Create an account: `email`, `name`, `password`. |
+diff --git a/src/app/api/orders/route.ts b/src/app/api/orders/route.ts
+index 7db71f6..8525124 100644
+--- a/src/app/api/orders/route.ts
++++ b/src/app/api/orders/route.ts
+@@ -1,8 +1,8 @@
+ import { getCurrentUser } from '../../../lib/auth';
+ import { db } from '../../../lib/db';
+-import { isRecord, jsonError, readJson } from '../../../lib/http';
++import { isRecord, jsonError, readJson, withErrors } from '../../../lib/http';
+ 
+-export async function GET(request: Request): Promise<Response> {
++export const GET = withErrors(async (request: Request): Promise<Response> => {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+   const orders = await db.order.findMany({
+@@ -11,9 +11,9 @@ export async function GET(request: Request): Promise<Response> {
+     orderBy: { createdAt: 'desc' },
+   });
+   return Response.json(orders);
+-}
++});
+ 
+-export async function POST(request: Request): Promise<Response> {
++export const POST = withErrors(async (request: Request): Promise<Response> => {
+   const user = await getCurrentUser(request);
+   if (user === null) return jsonError(401, 'sign in first');
+ 
+@@ -39,4 +39,4 @@ export async function POST(request: Request): Promise<Response> {
+     },
+   });
+   return Response.json(order, { status: 201 });
+-}
++});
+diff --git a/src/lib/http.ts b/src/lib/http.ts
+index 98e7202..0b06d88 100644
+--- a/src/lib/http.ts
++++ b/src/lib/http.ts
+@@ -14,3 +14,24 @@ export async function readJson(request: Request): Promise<unknown> {
+ export function isRecord(value: unknown): value is Record<string, unknown> {
+   return typeof value === 'object' && value !== null && !Array.isArray(value);
+ }
++
++/**
++ * Wraps a route handler so an unexpected error comes back as a JSON 500 instead of Next's HTML
++ * error page, which the mobile app cannot read.
++ */
++export function withErrors<A extends unknown[]>(
++  handler: (...args: A) => Promise<Response>,
++): (...args: A) => Promise<Response> {
++  return async (...args) => {
++    try {
++      return await handler(...args);
++    } catch (error) {
++      console.error(error);
++      const detail =
++        error instanceof Error
++          ? { error: error.message, stack: error.stack }
++          : { error: String(error) };
++      return Response.json(detail, { status: 500 });
++    }
++  };
++}
+diff --git a/test/with-errors.test.ts b/test/with-errors.test.ts
+new file mode 100644
+index 0000000..3bc3cf3
+--- /dev/null
++++ b/test/with-errors.test.ts
+@@ -0,0 +1,24 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { withErrors } from '../src/lib/http';
++
++afterEach(() => {
++  vi.restoreAllMocks();
++});
++
++describe('withErrors', () => {
++  it('passes a response through', async () => {
++    const handler = withErrors(async (status: number) => new Response(null, { status }));
++    expect((await handler(204)).status).toBe(204);
++  });
++
++  it('turns an unexpected error into a JSON 500', async () => {
++    vi.spyOn(console, 'error').mockImplementation(() => undefined);
++    const handler = withErrors(async () => {
++      throw new Error('database is down');
++    });
++    const response = await handler();
++    expect(response.status).toBe(500);
++    expect(response.headers.get('content-type')).toMatch(/^application\/json/);
++    expect(await response.json()).toMatchObject({ error: 'database is down' });
++  });
++});
