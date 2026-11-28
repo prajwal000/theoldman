@@ -68,7 +68,7 @@ export function parseRunArgs(argv: readonly string[]): RunArgs | undefined {
   };
 }
 
-function parseRuns(text: string | undefined): number {
+export function parseRuns(text: string | undefined): number {
   if (text === undefined) return DEFAULT_RUNS;
   const runs = /^\d+$/.test(text) ? Number(text) : Number.NaN;
   if (!(runs >= 1 && runs <= MAX_RUNS)) {

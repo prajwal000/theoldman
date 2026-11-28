@@ -7,23 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { parseRunArgs, USAGE } from './args.ts';
 import { dockerExec, InterruptedError } from './docker.ts';
 import { ConfigError } from './errors.ts';
-import { executeRuns, type RunRecord } from './execute.ts';
+import { anyFailed, executeRuns, summarize } from './execute.ts';
 import { abortOnInterrupt, INTERRUPTED_EXIT } from './interrupt.ts';
 import { PLAN_FILE, planRun } from './plan.ts';
 
 const evalsDir = fileURLToPath(new URL('..', import.meta.url));
 const repoDir = join(evalsDir, '..');
-
-function summarize(record: RunRecord): string {
-  const label = `${record.condition} #${String(record.run)}`;
-  const { result } = record;
-  if (result === null) return `${label}: failed: ${record.error ?? 'no result'}`;
-  const output = Object.values(result.modelUsage).reduce((sum, u) => sum + u.outputTokens, 0);
-  const seconds = Math.round((record.wallTimeMs ?? result.durationMs) / 1000);
-  const status = record.error === null ? (result.isError ? 'error' : 'ok') : record.error;
-  const models = result.models.length === 0 ? 'no model calls' : result.models.join(', ');
-  return `${label}: ${status}, ${String(seconds)} s, ${String(result.numTurns)} turns, $${result.totalCostUsd.toFixed(3)}, ${String(output)} output tokens (${models})`;
-}
 
 async function main(): Promise<void> {
   const args = parseRunArgs(process.argv.slice(2));
@@ -57,9 +46,7 @@ async function main(): Promise<void> {
   for (const record of records) process.stdout.write(`${summarize(record)}\n`);
   process.stdout.write(`Saved to ${relative(repoDir, dir)}\n`);
   if (controller.signal.aborted) process.exitCode = INTERRUPTED_EXIT;
-  else if (records.some((record) => record.error !== null || record.result?.isError !== false)) {
-    process.exitCode = 1;
-  }
+  else if (anyFailed(records)) process.exitCode = 1;
 }
 
 try {

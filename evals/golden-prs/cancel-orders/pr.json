@@ -1,0 +1,20 @@
+{
+  "title": "Let customers cancel pending orders",
+  "description": "Adds POST /api/orders/:id/cancel so customers can cancel an order before it is paid, with tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "cancel-orders",
+  "comments": [
+    {
+      "id": "ownership",
+      "file": "src/app/api/orders/[id]/cancel/route.ts",
+      "line": 14,
+      "issue": "The order is looked up by id alone, with no check that it belongs to the signed-in user, so any customer can cancel another customer's order."
+    },
+    {
+      "id": "paid-orders",
+      "file": "src/app/api/orders/[id]/cancel/route.ts",
+      "line": 16,
+      "issue": "Only cancelled orders are refused, so a PAID order can be cancelled too, although only pending orders should be."
+    }
+  ]
+}

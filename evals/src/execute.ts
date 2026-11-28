@@ -1,7 +1,8 @@
 // Runs a planned task in Docker: per run a fresh Compose project with the starter copied in and
-// committed as the baseline, Claude Code headless with the prompt, then the diff against the
-// baseline. Each run saves transcript.jsonl, diff.patch, stderr.log and run.json, scrubbed of
-// credentials, and its containers are removed whatever happens.
+// committed as the baseline (a review run then commits its PR on a branch), Claude Code headless
+// with the prompt, then the diff against the last commit. Each run saves transcript.jsonl,
+// diff.patch, stderr.log and run.json, scrubbed of credentials, and its containers are removed
+// whatever happens.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join, sep } from 'node:path';
@@ -11,6 +12,7 @@ import {
   buildAgentImage,
   type DockerExec,
   type ExecOptions,
+  type ExecResult,
   InterruptedError,
   must,
   pullFirst,
@@ -38,9 +40,20 @@ export interface RunRecord {
   readonly error: string | null;
 }
 
+/** What a run needs from a build task; a review run builds the same from a golden PR. */
+export type RunnableTask = Pick<Task, 'prompt' | 'starterDirs' | 'services' | 'timeoutMinutes'>;
+
+/** Runs `docker compose <args>` for the run's project and throws unless it succeeds. */
+export type ComposeStep = (
+  args: readonly string[],
+  options?: Partial<ExecOptions>,
+) => Promise<ExecResult>;
+
 export interface ExecuteContext {
-  readonly plan: RunPlan;
-  readonly task: Task;
+  readonly plan: Pick<RunPlan, 'condition' | 'runs'>;
+  readonly task: RunnableTask;
+  /** Runs after the baseline commit and before Claude starts, as a review run adds its PR. */
+  readonly setup?: (step: ComposeStep) => Promise<void>;
   readonly provider: Provider;
   readonly env: Env;
   readonly runDir: string;
@@ -70,6 +83,23 @@ function withSignal<T extends object>(
   options: T,
 ): T & { signal?: AbortSignal } {
   return ctx.signal === undefined ? options : { ...options, signal: ctx.signal };
+}
+
+/** One line per run for the console: status, time, turns, cost, output tokens and models. */
+export function summarize(record: RunRecord): string {
+  const label = `${record.condition} #${String(record.run)}`;
+  const { result } = record;
+  if (result === null) return `${label}: failed: ${record.error ?? 'no result'}`;
+  const output = Object.values(result.modelUsage).reduce((sum, u) => sum + u.outputTokens, 0);
+  const seconds = Math.round((record.wallTimeMs ?? result.durationMs) / 1000);
+  const status = record.error === null ? (result.isError ? 'error' : 'ok') : record.error;
+  const models = result.models.length === 0 ? 'no model calls' : result.models.join(', ');
+  return `${label}: ${status}, ${String(seconds)} s, ${String(result.numTurns)} turns, $${result.totalCostUsd.toFixed(3)}, ${String(output)} output tokens (${models})`;
+}
+
+/** Exit code 1 when any run failed or ended in an error. */
+export function anyFailed(records: readonly RunRecord[]): boolean {
+  return records.some((record) => record.error !== null || record.result?.isError !== false);
 }
 
 export async function executeRuns(ctx: ExecuteContext): Promise<RunRecord[]> {
@@ -136,7 +166,7 @@ async function runOnce(
     ...profiles,
     ...args,
   ];
-  const step = (args: readonly string[], options: Partial<ExecOptions> = {}) =>
+  const step: ComposeStep = (args, options = {}) =>
     must(ctx.docker, composeArgs(args), withSignal(ctx, { env: composeEnv, ...options }), secrets);
 
   const startedAt = new Date(clock()).toISOString();
@@ -162,6 +192,7 @@ async function runOnce(
     }
     await step(['exec', '-T', '-u', 'root', 'agent', 'chown', '-R', 'node:node', '/workspace']);
     await step(['exec', '-T', 'agent', 'sh', '-c', BASELINE]);
+    if (ctx.setup !== undefined) await ctx.setup(step);
 
     const dbEnv = task.services.includes('postgres') ? ['-e', `DATABASE_URL=${DATABASE_URL}`] : [];
     const start = clock();

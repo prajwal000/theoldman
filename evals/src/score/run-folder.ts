@@ -11,6 +11,10 @@ import { ConfigError } from '../errors.ts';
 import type { ProviderAuth, ProviderName } from '../provider.ts';
 
 export interface FolderPlan {
+  /** A build task run, or a review of a golden PR (whose ID is then the task ID). */
+  readonly kind: 'build' | 'review';
+  /** For a review: the golden PR's hash when it ran. */
+  readonly prHash: string | null;
   readonly createdAt: string;
   readonly task: {
     readonly id: string;
@@ -100,7 +104,10 @@ function readPlan(dir: string, name: string): FolderPlan {
   }
   if (!isRecord(models)) return bad('models');
   if (!isText(claudeCode)) return bad('claudeCode');
+  const pr = isRecord(plan.pr) ? plan.pr : {};
   return {
+    kind: plan.kind === 'review' ? 'review' : 'build',
+    prHash: orNull(pr.hash),
     createdAt,
     task: { id: task.id, title: task.title, starterHash: orNull(task.starterHash) },
     condition,
