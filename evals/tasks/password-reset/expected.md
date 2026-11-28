@@ -18,7 +18,7 @@ What a careful senior developer would do. The hidden tests check the behaviour t
 - Single use holds under concurrent requests: the token is claimed with a conditional update or in a transaction together with the password change.
 - Using one token retires any other outstanding tokens for that user.
 - A Prisma migration adds the token table; the schema is not changed without one.
-- The public URL comes from configuration (`APP_URL` or similar), listed in `.env.example` and the README.
+- The public URL comes from `APP_URL`, listed in `.env.example` and the README. The hidden tests set it, so failing loudly when it is missing is fine.
 - The README lists the new routes.
 - Tests cover the happy path, unknown email, reuse, expiry and session sign-out.
 - No secrets or tokens in logs.
