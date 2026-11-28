@@ -1,0 +1,8 @@
+{
+  "title": "Let admins change a product's price",
+  "description": "Adds PATCH /api/products/:id for admins to change priceCents. Existing orders keep the total they were placed with. Includes tests and a README entry.",
+  "base": "next-prisma",
+  "branch": "change-price",
+  "clean": true,
+  "comments": []
+}

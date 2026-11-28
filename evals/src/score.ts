@@ -1,5 +1,6 @@
 // Command-line entry: pnpm --filter evals run score -- <run folder>...
-// Scores finished run folders into evals/results/<date>-<label>.json. Run with the resolve hook
+// Scores finished run folders into evals/results/<date>-<label>.json, or review runs into
+// <date>-<label>-review.json. Run with the resolve hook
 // in ts-imports.ts, which the package script loads, so the comment rules come from
 // packages/hooks/src.
 
@@ -10,7 +11,8 @@ import { dockerExec, InterruptedError } from './docker.ts';
 import { ConfigError } from './errors.ts';
 import { abortOnInterrupt, INTERRUPTED_EXIT } from './interrupt.ts';
 import { type ConditionResult, writeResults } from './score/results.ts';
-import { readRunFolder } from './score/run-folder.ts';
+import { scoreReviewFolders, type Summary, writeReviewResults } from './score/review-folders.ts';
+import { readRunFolder, type RunFolder } from './score/run-folder.ts';
 import { scoreFolders } from './score/score-folders.ts';
 
 const evalsDir = fileURLToPath(new URL('..', import.meta.url));
@@ -21,8 +23,10 @@ const USAGE = `Usage: pnpm --filter evals run score -- <run folder>...
 
   <run folder>  a folder the runner wrote, by name (as in evals/runs/) or path
 
-Scores every run in the folders and writes evals/results/<date>-<label>.json. The folders must
-have run on the same provider, models and Claude Code version, with exact model IDs.`;
+Scores every run in the folders and writes evals/results/<date>-<label>.json, or
+<date>-<label>-review.json for review runs, whose reviews an LLM judge compares with the golden
+comments on the runs' provider and main model. The folders must have run on the same provider,
+models and Claude Code version, with exact model IDs, and be all build runs or all review runs.`;
 
 function folderPath(arg: string): string {
   const candidates = [join(runsDir, arg), resolve(process.env.INIT_CWD ?? process.cwd(), arg)];
@@ -43,6 +47,14 @@ async function main(): Promise<void> {
     return;
   }
   const folders = args.map((arg) => readRunFolder(folderPath(arg)));
+  const reviews = folders.filter((folder) => folder.plan.kind === 'review').length;
+  if (reviews > 0 && reviews < folders.length) {
+    throw new ConfigError('Score build runs and review runs separately.');
+  }
+  if (reviews > 0) {
+    await scoreReviews(folders);
+    return;
+  }
   const controller = abortOnInterrupt();
   const results = await scoreFolders({
     folders,
@@ -63,6 +75,38 @@ async function main(): Promise<void> {
     }
   }
   for (const note of results.notes) process.stdout.write(`note: ${note}\n`);
+  process.stdout.write(`Results written to ${relative(repoDir, file)}\n`);
+}
+
+const rate = (value: number | null): string =>
+  value === null ? '-' : `${String(Math.round(value * 1000) / 10)}%`;
+
+function reviewLine(name: string, s: Summary): string {
+  return `${name}: ${String(s.runs)} runs (${String(s.failed)} failed), precision ${rate(s.precision)} (${String(s.truePositives)}/${String(s.findings)}), recall ${rate(s.recall)} (${String(s.goldenFound)}/${String(s.goldenTotal)}), injection pass rate ${rate(s.injectionPassRate)} (${String(s.injectionResisted)}/${String(s.injectionRuns)}), $${mean(s.costUsd)}, ${mean(s.minutes)} min`;
+}
+
+async function scoreReviews(folders: readonly RunFolder[]): Promise<void> {
+  const controller = abortOnInterrupt();
+  const results = await scoreReviewFolders({
+    folders,
+    prsDir: join(evalsDir, 'golden-prs'),
+    dockerDir: join(evalsDir, 'docker'),
+    env: process.env,
+    docker: dockerExec,
+    signal: controller.signal,
+    progress: (line) => process.stdout.write(`${line}\n`),
+  });
+  const file = writeReviewResults(join(evalsDir, 'results'), results);
+  for (const pr of results.prs) {
+    for (const [condition, summary] of Object.entries(pr.conditions)) {
+      process.stdout.write(`${reviewLine(`${pr.id} ${condition}`, summary)}\n`);
+    }
+  }
+  for (const [condition, summary] of Object.entries(results.conditions)) {
+    process.stdout.write(`${reviewLine(`all ${condition}`, summary)}\n`);
+  }
+  for (const note of results.notes) process.stdout.write(`note: ${note}\n`);
+  process.stdout.write(`Judge: ${results.judge.model}, $${String(results.judge.costUsd)}\n`);
   process.stdout.write(`Results written to ${relative(repoDir, file)}\n`);
 }
 
