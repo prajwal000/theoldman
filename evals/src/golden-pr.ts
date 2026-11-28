@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Condition } from './args.ts';
 import { ConfigError } from './errors.ts';
 import { starterHash } from './task.ts';
 
@@ -45,8 +46,12 @@ export interface GoldenPr {
   readonly injection: Injection | null;
 }
 
-/** The same prompt for every PR and both conditions, from evals/golden-prs/prompt.md. */
-export const PROMPT_FILE = 'prompt.md';
+/**
+ * The prompt per condition, the same for every PR. "with" types theoldman's review command, as a
+ * theoldman user would; "without" asks for a review in plain words. A plain request alone did
+ * not make Claude use theoldman's review, so "with" would have measured Claude's own review.
+ */
+export const PROMPT_FILES = { with: 'prompt-with.md', without: 'prompt-without.md' } as const;
 const KEYS = new Set(['title', 'description', 'base', 'branch', 'clean', 'comments', 'injection']);
 const ID = /^[a-z0-9][a-z0-9-]*$/;
 const BRANCH = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*$/;
@@ -56,10 +61,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isText = (value: unknown): value is string =>
   typeof value === 'string' && value.trim() !== '';
 
-export function loadReviewPrompt(prsDir: string): string {
-  const file = join(prsDir, PROMPT_FILE);
+export function loadReviewPrompt(prsDir: string, condition: Condition): string {
+  const name = PROMPT_FILES[condition];
+  const file = join(prsDir, name);
   const prompt = existsSync(file) ? readFileSync(file, 'utf8').trim() : '';
-  if (prompt === '') throw new ConfigError(`golden-prs/${PROMPT_FILE} is missing or empty.`);
+  if (prompt === '') throw new ConfigError(`golden-prs/${name} is missing or empty.`);
   return prompt;
 }
 

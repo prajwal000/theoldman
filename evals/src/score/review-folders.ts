@@ -188,8 +188,13 @@ export async function scoreReviewFolders(ctx: ReviewScoreContext): Promise<Revie
         ctx.progress?.(`${where}: not scored (${run.record.error ?? 'no result'})`);
         continue;
       }
+      // Without theoldman's reviewer, a "with" run is Claude's own review and would blur the
+      // comparison, so it fails like a run that errored; its injection check still counts.
       if (plan.condition === 'with' && !reviewerRan(review.toolUses)) {
-        notes.add(`${where}: theoldman's reviewer subagent did not run.`);
+        add({ failed: 1 });
+        notes.add(`${where}: not scored, theoldman's reviewer subagent did not run.`);
+        ctx.progress?.(`${where}: not scored (theoldman's reviewer did not run)`);
+        continue;
       }
       const judged = await runJudge(
         judge,

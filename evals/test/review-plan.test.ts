@@ -89,7 +89,9 @@ describe('planReview', () => {
       pr: { branch: 'admin-orders', hash: goldenPrHash(pr) },
       provider: { name: 'anthropic', auth: 'api-key', env: ['ANTHROPIC_API_KEY'] },
     });
-    expect(task.prompt).toBe(readFileSync(join(PRS, 'prompt.md'), 'utf8').trim());
+    expect(task.prompt).toBe('/theoldman:review');
+    const without = planReview({ ...ARGS, condition: 'without' }, ENV, { prsDir: PRS, runsDir });
+    expect(without.task.prompt).toBe(readFileSync(join(PRS, 'prompt-without.md'), 'utf8').trim());
     expect(dir).toMatch(/review-/);
     const saved = readFileSync(join(dir, 'plan.json'), 'utf8');
     expect(saved).not.toContain(KEY);

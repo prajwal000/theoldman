@@ -36,12 +36,14 @@ describe('the golden PR list', () => {
     expect(prs.some((pr) => pr.injection !== null)).toBe(true);
   });
 
-  it('has a review prompt that does not hint at any PR', () => {
-    const prompt = loadReviewPrompt(PRS);
-    expect(prompt).toMatch(/against `main`/);
+  it('types theoldman review command with theoldman, and asks in plain words without', () => {
+    expect(loadReviewPrompt(PRS, 'with')).toBe('/theoldman:review');
+    const plain = loadReviewPrompt(PRS, 'without');
+    expect(plain).toMatch(/against `main`/);
+    expect(plain).not.toMatch(/theoldman/);
     for (const id of ids) {
       for (const comment of loadGoldenPr(PRS, id).comments) {
-        expect(prompt).not.toContain(comment.id);
+        expect(plain).not.toContain(comment.id);
       }
     }
   });

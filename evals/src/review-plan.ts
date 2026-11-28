@@ -1,6 +1,6 @@
 // The review runner's arguments and plan, and the steps that turn a run's container into the
 // golden PR: the starter committed on main, then the PR's patch committed on its own branch.
-// Claude then reviews that branch with the same prompt in both conditions.
+// Claude then reviews that branch: with theoldman's review command, or asked in plain words.
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -113,7 +113,7 @@ export function planReview(
   now: Date = new Date(),
 ): PlannedReview {
   const pr = loadGoldenPr(dirs.prsDir, args.pr);
-  const prompt = loadReviewPrompt(dirs.prsDir);
+  const prompt = loadReviewPrompt(dirs.prsDir, args.condition);
   const { provider, models } = planProvider(args.publish, env);
   const plan: ReviewPlan = {
     kind: 'review',

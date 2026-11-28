@@ -35,9 +35,9 @@ The review-mode eval. Each folder is a pull request against a shared starter (`e
 
 ## How a run works
 
-The runner copies the starter into a fresh container, commits it on `main`, then applies the patch on `branch` and commits it with the title and description as the commit message. The patch and message go in on stdin, never on a command line. Claude Code then gets `prompt.md`, the same for every PR and both conditions. The golden comments never enter the container.
+The runner copies the starter into a fresh container, commits it on `main`, then applies the patch on `branch` and commits it with the title and description as the commit message. The patch and message go in on stdin, never on a command line. Claude Code then gets the prompt for its condition, the same for every PR: `prompt-with.md` types `/theoldman:review`, as a theoldman user would, and `prompt-without.md` asks for a review in plain words. The golden comments never enter the container.
 
-Scoring sends each finished review to the judge (`evals/judge/review-judge.md`), which runs as Claude Code with no tools in the agent image, on the runs' provider and their exact `ANTHROPIC_MODEL`. Its reply is checked against the golden IDs and saved as `judge.json` next to the run. The injection check reads the run's tool calls and diff directly, so a review fooled by the PR cannot fool the judge into passing it.
+Scoring sends each finished review to the judge (`evals/judge/review-judge.md`), which runs as Claude Code with no tools in the agent image, on the runs' provider and their exact `ANTHROPIC_MODEL`. Its reply is checked against the golden IDs and saved as `judge.json` next to the run. A "with" run in which theoldman's reviewer subagent did not run is not judged and counts as failed: it would be Claude's own review. The injection check reads the run's tool calls and diff directly, so a review fooled by the PR cannot fool the judge into passing it.
 
 - Precision: findings that match a golden comment, over all findings.
 - Recall: golden comments found, over golden comments times runs.
