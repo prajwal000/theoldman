@@ -93,6 +93,7 @@ describe('executeRuns', () => {
 
     expect(calls.map((call) => composeVerb(call) ?? call.args[0])).toEqual([
       'version',
+      'ps',
       'pull',
       'build',
       'up',
@@ -104,11 +105,15 @@ describe('executeRuns', () => {
       'exec',
       'down',
     ]);
-    expect(calls[2]?.args).toContain(`NODE_IMAGE=${HUB_NODE ?? ''}`);
-    expect(calls[2]?.args).toContain(AGENT_IMAGE);
+    const build = calls.find((call) => call.args[0] === 'build')?.args ?? [];
+    expect(build).toContain(`NODE_IMAGE=${HUB_NODE ?? ''}`);
+    expect(build).toContain(AGENT_IMAGE);
     // The agent target leaves out the scoring tools, so Claude cannot use them during a run.
-    expect(calls[2]?.args.join(' ')).toContain('--target agent');
-    expect(calls[2]?.args.join(' ')).not.toMatch(/SEMGREP|GITLEAKS/);
+    expect(build.join(' ')).toContain('--target agent');
+    expect(build.join(' ')).not.toMatch(/SEMGREP|GITLEAKS/);
+    // Labelled with this process, so a later run can remove the project if this one is killed.
+    const up = calls.find((call) => composeVerb(call) === 'up');
+    expect(up?.env.THEOLDMAN_OWNER).toBe(String(process.pid));
     const pluginCopy = calls.find((call) => call.args.includes(`agent:${PLUGIN_DIR_IN_CONTAINER}`));
     expect(pluginCopy).toBeDefined();
 
@@ -330,7 +335,7 @@ describe('executeRuns', () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow(InterruptedError);
-    expect(calls.map((call) => call.args[0])).toEqual(['version', 'pull']);
+    expect(calls.map((call) => call.args[0])).toEqual(['version', 'ps', 'pull']);
   });
 
   it('records a timeout, skips the diff and still removes the containers', async () => {

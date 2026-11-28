@@ -14,6 +14,10 @@ interface Call extends ExecOptions {
   readonly args: readonly string[];
 }
 
+/** A scoring container, as opposed to the containers that warm the npm cache. */
+const isScoring = (args: readonly string[]): boolean =>
+  args[0] === 'run' && args.includes('/score/report.mjs');
+
 /** Docker that answers each scoring container with `report`. */
 function fakeDocker(report: Record<string, unknown> = {}) {
   const calls: Call[] = [];
@@ -21,7 +25,7 @@ function fakeDocker(report: Record<string, unknown> = {}) {
     calls.push({ args, ...options });
     const ok = { code: 0, stdout: '', stderr: '', timedOut: false };
     if (args[0] === 'version') return Promise.resolve({ ...ok, stdout: 'linux\n' });
-    if (args[0] === 'run') {
+    if (isScoring(args)) {
       const body = {
         notes: ['no eslint.config file: ESLint not run'],
         files: { 'src/math.ts': CLAMPED_MATH },
@@ -123,7 +127,7 @@ describe('scoreFolders', () => {
       },
     });
     expect(task?.conditions.without?.metrics.costUsd).toMatchObject({ mean: 0.02 });
-    expect(calls.filter((call) => call.args[0] === 'run')).toHaveLength(3);
+    expect(calls.filter((call) => isScoring(call.args))).toHaveLength(3);
   });
 
   it('scores in the scoring image, built from its own Dockerfile target', async () => {
@@ -133,9 +137,9 @@ describe('scoreFolders', () => {
     expect(build.join(' ')).toContain('--target score');
     expect(build).toContain(`SEMGREP_RULES_COMMIT=${SEMGREP_RULES_COMMIT}`);
     expect(build).toContain(SCORE_IMAGE);
-    const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
+    const run = calls.find((call) => isScoring(call.args))?.args ?? [];
     expect(run).toContain(SCORE_IMAGE);
-    expect(run.join(' ')).toContain('target=/hidden,readonly');
+    expect(run.join(' ')).toContain('target=/hidden/0,readonly');
   });
 
   it('scores each run of a task with Postgres against a fresh database', async () => {
@@ -166,12 +170,17 @@ describe('scoreFolders', () => {
 
     const steps = calls.map((call) => {
       const at = call.args.indexOf('--profile');
-      return call.args[0] === 'compose' ? `compose ${String(call.args[at + 2])}` : call.args[0];
+      if (call.args[0] === 'compose') return `compose ${String(call.args[at + 2])}`;
+      if (call.args[0] === 'run' && !isScoring(call.args)) return 'warm cache';
+      return call.args[0];
     });
     expect(steps).toEqual([
       'version',
+      'ps',
       'pull',
       'build',
+      'warm cache',
+      'warm cache',
       'pull',
       'compose up',
       'run',
@@ -183,8 +192,8 @@ describe('scoreFolders', () => {
     const up = calls.find((call) => call.args.includes('up'));
     expect(up?.env.POSTGRES_IMAGE).toBe(imageRefs(IMAGES.postgres)[0]);
     expect(up?.env.ANTHROPIC_API_KEY).toBeUndefined();
-    const run = calls.find((call) => call.args[0] === 'run')?.args ?? [];
-    expect(run.slice(4, 6)).toEqual(['--network', 'theoldman-score-db-with-1_default']);
+    const run = calls.find((call) => isScoring(call.args))?.args ?? [];
+    expect(run.slice(6, 8)).toEqual(['--network', 'theoldman-score-db-with-1_default']);
   });
 
   it('removes the database when scoring a run fails', async () => {
@@ -205,7 +214,7 @@ describe('scoreFolders', () => {
     const folders = [readRunFolder(writeRunFolder(root, 'db', withDb, [{}]))];
     const good = fakeDocker();
     const docker: DockerExec = (args, options) =>
-      args[0] === 'run'
+      isScoring(args)
         ? Promise.resolve({ code: 125, stdout: '', stderr: 'boom', timedOut: false })
         : good.docker(args, options);
     await expect(
@@ -252,14 +261,14 @@ new file mode 100644
     ];
     const results = await score([folder('w', {}, runs)], docker);
     expect(results.tasks[0]?.conditions.with).toMatchObject({ runs: 1, failed: 2 });
-    expect(calls.filter((call) => call.args[0] === 'run')).toHaveLength(1);
+    expect(calls.filter((call) => isScoring(call.args))).toHaveLength(1);
   });
 
   it('counts a run whose diff does not apply as failed, with a note', async () => {
     const good = fakeDocker();
     let containers = 0;
     const docker: DockerExec = (args, options) => {
-      if (args[0] === 'run' && ++containers === 1) {
+      if (isScoring(args) && ++containers === 1) {
         const report = { notes: [], error: "the run's diff does not apply to the starter" };
         return Promise.resolve({
           code: 0,

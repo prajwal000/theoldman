@@ -27,7 +27,12 @@ export async function startDatabase(
   signal?: AbortSignal,
 ): Promise<Database> {
   // Compose interpolates every service, so the agent's image must be named though it never starts.
-  const composeEnv = { ...env, AGENT_IMAGE: SCORE_IMAGE, POSTGRES_IMAGE: input.postgresImage };
+  const composeEnv = {
+    ...env,
+    AGENT_IMAGE: SCORE_IMAGE,
+    POSTGRES_IMAGE: input.postgresImage,
+    THEOLDMAN_OWNER: String(process.pid),
+  };
   const compose = (args: readonly string[]): string[] => [
     'compose',
     '-p',

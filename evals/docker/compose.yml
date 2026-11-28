@@ -5,6 +5,9 @@
 services:
   agent:
     image: ${AGENT_IMAGE:?the eval runner sets AGENT_IMAGE}
+    # The process that started this project, so a later run can remove it if that process died.
+    labels:
+      - theoldman.owner=${THEOLDMAN_OWNER:-0}
     command: ['sleep', 'infinity']
     init: true
     user: node
@@ -26,6 +29,8 @@ services:
     # Interpolation covers every service, so this needs a default even when the profile is off.
     image: ${POSTGRES_IMAGE:-postgres-image-not-set}
     profiles: ['postgres']
+    labels:
+      - theoldman.owner=${THEOLDMAN_OWNER:-0}
     environment:
       - POSTGRES_USER=eval
       - POSTGRES_PASSWORD=eval

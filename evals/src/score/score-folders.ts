@@ -3,24 +3,21 @@
 // starter it used, in a container of the scoring image, and scored from what that container
 // reports and from the run's run.json and transcript.
 
-import { join } from 'node:path';
 import type { Condition } from '../args.ts';
-import { buildScoreImage, type DockerExec, pullFirst, requireDocker } from '../docker.ts';
+import type { DockerExec } from '../docker.ts';
 import { ConfigError } from '../errors.ts';
-import { IMAGES, imageRefs } from '../images.ts';
 import { isExactModelId } from '../models.ts';
 import type { Env } from '../provider.ts';
 import { dockerEnv } from '../secrets.ts';
 import { loadTask, starterHash, type Task } from '../task.ts';
 import { scoreComments } from './comments.ts';
-import { startDatabase } from './database.ts';
 import { scoreDocs } from './docs.ts';
 import { isScorable, runMetrics } from './metrics.ts';
 import { aggregate, modelLabel, type Results, type RunValues, type TaskResult } from './results.ts';
 import type { FolderPlan, RunFolder } from './run-folder.ts';
 import { scoreSecurity } from './security.ts';
+import { containerName, inspectTaskRun, prepareScoring } from './task-run.ts';
 import { scoreTests } from './tests.ts';
-import { inspectWorkspace, type WorkspaceReport } from './workspace.ts';
 
 export interface ScoreContext {
   readonly folders: readonly RunFolder[];
@@ -82,11 +79,15 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
   }
 
   const env = dockerEnv(ctx.env);
-  await requireDocker(ctx.docker, env);
-  await buildScoreImage(ctx.docker, ctx.dockerDir, env, ctx.signal);
-  const postgresImage = [...taskById.values()].some((task) => task.services.includes('postgres'))
-    ? await pullFirst(ctx.docker, imageRefs(IMAGES.postgres), env, ctx.signal)
-    : undefined;
+  const prepared = await prepareScoring(
+    ctx.docker,
+    { dockerDir: ctx.dockerDir, tasks: [...taskById.values()] },
+    env,
+    ctx.signal,
+    ctx.progress,
+  );
+  for (const problem of prepared.problems) notes.add(problem);
+  const { postgresImage } = prepared;
 
   const groups = new Map<string, Map<Condition, Group>>();
   const used = new Set<string>();
@@ -114,36 +115,18 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
       }
       const task = taskById.get(plan.task.id);
       if (task === undefined) throw new Error(`task ${plan.task.id} was not loaded`);
-      const name = `theoldman-score-${folder.name}-${run.name}`
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]/g, '-');
-      const database =
-        postgresImage === undefined || !task.services.includes('postgres')
-          ? undefined
-          : await startDatabase(
-              ctx.docker,
-              { dockerDir: ctx.dockerDir, project: name, postgresImage },
-              env,
-              ctx.signal,
-            );
-      let report: WorkspaceReport;
-      try {
-        report = await inspectWorkspace(
-          ctx.docker,
-          {
-            starterDirs: task.starterDirs,
-            hiddenTestsDir: task.hiddenTestsDir,
-            runDir: run.dir,
-            reportScript: join(ctx.dockerDir, 'score-report.mjs'),
-            name,
-            ...(database === undefined ? {} : { network: database.network }),
-          },
-          env,
-          ctx.signal,
-        );
-      } finally {
-        await database?.stop();
-      }
+      const report = await inspectTaskRun(
+        ctx.docker,
+        {
+          task,
+          runDir: run.dir,
+          name: containerName('theoldman-score', folder.name, run.name),
+          dockerDir: ctx.dockerDir,
+          postgresImage,
+        },
+        env,
+        ctx.signal,
+      );
       for (const note of report.notes) notes.add(`${plan.task.id}: ${note}`);
       if (report.error !== null) {
         group.failed += 1;
@@ -174,6 +157,7 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
       }
       if (report.tsc !== null) values.tscErrors = report.tsc.errors;
       if (report.eslint !== null) values.eslintErrors = report.eslint.errors;
+      if (report.build !== null) values.buildFailed = report.build.ok ? 0 : 1;
       if (security.semgrep !== null) values.semgrepFindings = security.semgrep;
       if (security.gitleaks !== null) values.gitleaksFindings = security.gitleaks;
       if (tests.hiddenPassRate !== null) values.hiddenTestsPassRate = tests.hiddenPassRate;
@@ -182,7 +166,7 @@ export async function scoreFolders(ctx: ScoreContext): Promise<Results> {
       const shown = (value: number | null | undefined): string =>
         value === null || value === undefined ? '-' : String(Math.round(value * 100) / 100);
       ctx.progress?.(
-        `${folder.name}/${run.name}: ${String(comments.comments)} filler comments, tsc ${shown(report.tsc?.errors)}, eslint ${shown(report.eslint?.errors)}, semgrep ${shown(security.semgrep)}, gitleaks ${shown(security.gitleaks)}, hidden tests ${shown(tests.hiddenPassRate)}, tests added ${shown(tests.testsAdded)}, docs findings ${String(docs.findings)}`,
+        `${folder.name}/${run.name}: ${String(comments.comments)} filler comments, tsc ${shown(report.tsc?.errors)}, eslint ${shown(report.eslint?.errors)}, build ${report.build === null ? '-' : report.build.ok ? 'ok' : 'failed'}, semgrep ${shown(security.semgrep)}, gitleaks ${shown(security.gitleaks)}, hidden tests ${shown(tests.hiddenPassRate)}, tests added ${shown(tests.testsAdded)}, docs findings ${String(docs.findings)}`,
       );
     }
   }

@@ -122,6 +122,7 @@
             "addedLines",
             "tscErrors",
             "eslintErrors",
+            "buildFailed",
             "semgrepFindings",
             "gitleaksFindings",
             "hiddenTestsPassRate",
@@ -141,6 +142,10 @@
             "addedLines": { "$ref": "#/$defs/stats" },
             "tscErrors": { "$ref": "#/$defs/stats" },
             "eslintErrors": { "$ref": "#/$defs/stats" },
+            "buildFailed": {
+              "description": "1 for a run whose `next build` failed, else 0; the mean is the share of runs that do not build.",
+              "$ref": "#/$defs/stats"
+            },
             "semgrepFindings": {
               "description": "Semgrep findings from security rules (pinned semgrep-rules, JavaScript and TypeScript) on lines the run added.",
               "$ref": "#/$defs/stats"

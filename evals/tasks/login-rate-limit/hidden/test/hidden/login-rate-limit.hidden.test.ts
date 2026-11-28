@@ -1,11 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { POST as login } from '../../src/app/api/auth/login/route';
-import { call, createUser, resetDatabase } from './support';
+import { ageDatabase, call, createUser, resetDatabase } from './support';
 
 beforeEach(resetDatabase);
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 const attempt = (email: string, password: string) =>
   login(call('/api/auth/login', { body: { email, password } }));
@@ -35,8 +32,7 @@ describe('login rate limit', () => {
     const { user, password } = await createUser();
     await fail(user.email, 5);
     expect((await attempt(user.email, password)).status).toBe(429);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+    await ageDatabase(16 * 60 * 1000);
     expect((await attempt(user.email, password)).status).toBe(200);
   });
 

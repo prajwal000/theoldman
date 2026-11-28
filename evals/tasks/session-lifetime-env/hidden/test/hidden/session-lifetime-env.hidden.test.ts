@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '../../src/lib/db';
-import { call, createUser, resetDatabase } from './support';
+import { ageDatabase, call, createUser, resetDatabase } from './support';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 let previous: string | undefined;
@@ -13,7 +13,6 @@ beforeEach(async () => {
   vi.resetModules();
 });
 afterEach(() => {
-  vi.useRealTimers();
   if (previous === undefined) delete process.env.SESSION_TTL_DAYS;
   else process.env.SESSION_TTL_DAYS = previous;
 });
@@ -64,8 +63,7 @@ describe('session lifetime', () => {
 
     const { GET: me } = await import('../../src/app/api/users/me/route');
     expect((await me(call('/api/users/me', { token }))).status).toBe(200);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 2 * DAY_MS);
+    await ageDatabase(2 * DAY_MS);
     expect((await me(call('/api/users/me', { token }))).status).toBe(401);
   });
 
